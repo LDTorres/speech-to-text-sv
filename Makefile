@@ -1,12 +1,15 @@
 GO ?= go
 
-.PHONY: run test
+.PHONY: run test setup-whisper detect-steamdeck-trigger
 
 run:
-	@set -a; \
-	if [ -f .env ]; then . ./.env; fi; \
-	set +a; \
 	$(GO) run ./cmd/sttd
 
 test:
 	GOCACHE=$${GOCACHE:-/tmp/gocache} $(GO) test ./...
+
+setup-whisper:
+	./scripts/install-whisper.sh
+
+detect-steamdeck-trigger:
+	./scripts/detect-steamdeck-trigger.sh

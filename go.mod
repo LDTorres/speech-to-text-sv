@@ -3,8 +3,10 @@ module github.com/LDTorres/speech-to-text-sv
 go 1.26.0
 
 require (
+	github.com/gen2brain/malgo v0.11.24
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/stretchr/testify v1.10.0
+	golang.design/x/hotkey v0.4.1
 	go.uber.org/zap v1.27.0
 )
 

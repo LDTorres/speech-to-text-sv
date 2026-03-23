@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"syscall"
 
 	"github.com/LDTorres/speech-to-text-sv/internal/app"
 	"github.com/LDTorres/speech-to-text-sv/internal/config"
 	"github.com/LDTorres/speech-to-text-sv/internal/log"
-	"github.com/LDTorres/speech-to-text-sv/internal/modules/audio"
 	"github.com/LDTorres/speech-to-text-sv/internal/modules/notify"
 	"github.com/LDTorres/speech-to-text-sv/internal/modules/session"
 	"github.com/LDTorres/speech-to-text-sv/internal/modules/transcribe"
@@ -18,8 +18,9 @@ import (
 )
 
 type Bootstrap struct {
-	daemon *app.Daemon
-	logger *zap.Logger
+	daemon   *app.Daemon
+	logger   *zap.Logger
+	platform config.ResolvedPlatform
 }
 
 func New(ctx context.Context) (*Bootstrap, error) {
@@ -34,20 +35,29 @@ func New(ctx context.Context) (*Bootstrap, error) {
 		return nil, err
 	}
 
+	resolvedPlatform, err := cfg.ResolvePlatform(runtime.GOOS)
+	if err != nil {
+		return nil, err
+	}
+
 	logger, err := log.New(cfg.App.Environment)
 	if err != nil {
 		return nil, err
 	}
 
-	triggerWatcher := platform.NewTriggerWatcher(logger)
-	recorder := audio.NewStubRecorder(cfg.Audio.TempDir, cfg.Audio.FileName)
+	triggerWatcher := platform.NewTriggerWatcher(
+		logger,
+		cfg.Trigger,
+		resolvedPlatform,
+	)
+	recorder := platform.NewRecorder(cfg.Audio, resolvedPlatform)
 	transcriber := transcribe.NewWhisperRunner(
 		cfg.Transcribe.BinaryPath,
 		cfg.Transcribe.ModelPath,
 		cfg.Transcribe.Language,
 		cfg.Transcribe.Timeout,
 	)
-	clipboard := platform.NewClipboard(logger, cfg.Clipboard.EnablePaste)
+	clipboard := platform.NewClipboard(logger, cfg.Clipboard.EnablePaste, resolvedPlatform)
 
 	var notifier notify.Notifier = notify.NewNoop()
 
@@ -55,8 +65,9 @@ func New(ctx context.Context) (*Bootstrap, error) {
 	daemon := app.New(logger, triggerWatcher, sessionService, cfg.App.ShutdownTimeout)
 
 	return &Bootstrap{
-		daemon: daemon,
-		logger: logger,
+		daemon:   daemon,
+		logger:   logger,
+		platform: resolvedPlatform,
 	}, nil
 }
 

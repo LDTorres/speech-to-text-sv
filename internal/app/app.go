@@ -38,7 +38,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), d.shutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.shutdownTimeout)
 		defer cancel()
 
 		if err := d.triggerWatcher.Stop(shutdownCtx); err != nil && !errors.Is(err, trigger.ErrWatcherNotStarted) {

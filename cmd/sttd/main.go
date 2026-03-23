@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/LDTorres/speech-to-text-sv/internal/bootstrap"
+	"github.com/LDTorres/speech-to-text-sv/internal/platform"
 	"go.uber.org/zap"
 )
 
@@ -14,10 +15,16 @@ func main() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	boot, err := bootstrap.New(rootCtx)
-	if err != nil {
+	if err := platform.RunOnMain(rootCtx, run); err != nil {
 		writeStartupError(err)
 		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context) error {
+	boot, err := bootstrap.New(ctx)
+	if err != nil {
+		return err
 	}
 
 	defer func() {
@@ -26,10 +33,7 @@ func main() {
 		}
 	}()
 
-	if err := boot.Run(rootCtx); err != nil {
-		writeStartupError(err)
-		os.Exit(1)
-	}
+	return boot.Run(ctx)
 }
 
 func writeStartupError(err error) {

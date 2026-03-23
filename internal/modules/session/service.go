@@ -90,6 +90,7 @@ func (s *SessionService) HandleTriggerReleased(ctx context.Context) error {
 
 	transcript, err := s.transcriber.TranscribeFile(ctx, recording.Path)
 	if err != nil {
+		s.clearTranscript()
 		return fmt.Errorf("%w: %s", ErrTranscriptionFailed, err)
 	}
 
@@ -162,6 +163,14 @@ func (s *SessionService) finishRecording() error {
 func (s *SessionService) releaseRecording() {
 	s.mu.Lock()
 	s.state.recordingActive = false
+	s.mu.Unlock()
+}
+
+func (s *SessionService) clearTranscript() {
+	s.mu.Lock()
+	s.state.lastTranscript = ""
+	s.state.lastTranscriptAt = time.Time{}
+	s.state.retryEligible = false
 	s.mu.Unlock()
 }
 

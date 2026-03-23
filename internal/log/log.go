@@ -1,4 +1,4 @@
-package logger
+package log
 
 import (
 	"fmt"
@@ -20,10 +20,10 @@ func New(environment string) (*zap.Logger, error) {
 	cfg.EncoderConfig.TimeKey = "timestamp"
 	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 
-	log, err := cfg.Build()
+	logger, err := cfg.Build()
 	if err != nil {
 		return nil, fmt.Errorf("build logger: %w", err)
 	}
 
-	return log, nil
+	return logger, nil
 }

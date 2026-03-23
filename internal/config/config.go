@@ -8,55 +8,99 @@ import (
 )
 
 type Config struct {
-	App       AppConfig
-	Server    ServerConfig
-	Database  DatabaseConfig
-	Telemetry TelemetryConfig
+	App        AppConfig
+	Trigger    TriggerConfig
+	Audio      AudioConfig
+	Transcribe TranscribeConfig
+	Clipboard  ClipboardConfig
+	Notify     NotifyConfig
 }
 
 type AppConfig struct {
-	Environment string `envconfig:"ENV" default:"development"`
+	Environment     string        `envconfig:"ENV" default:"development"`
+	ShutdownTimeout time.Duration `envconfig:"SHUTDOWN_TIMEOUT" default:"5s"`
 }
 
-type ServerConfig struct {
-	Addr              string        `envconfig:"ADDR" default:":8080"`
-	ReadHeaderTimeout time.Duration `envconfig:"READ_HEADER_TIMEOUT" default:"5s"`
-	ReadTimeout       time.Duration `envconfig:"READ_TIMEOUT" default:"10s"`
-	WriteTimeout      time.Duration `envconfig:"WRITE_TIMEOUT" default:"10s"`
-	IdleTimeout       time.Duration `envconfig:"IDLE_TIMEOUT" default:"60s"`
-	RequestTimeout    time.Duration `envconfig:"REQUEST_TIMEOUT" default:"15s"`
-	ShutdownTimeout   time.Duration `envconfig:"SHUTDOWN_TIMEOUT" default:"10s"`
+type TriggerConfig struct {
+	Source          string        `envconfig:"SOURCE" default:"stub"`
+	DoubleTapWindow time.Duration `envconfig:"DOUBLE_TAP_WINDOW" default:"400ms"`
 }
 
-type DatabaseConfig struct {
-	URL string `envconfig:"URL" required:"true"`
+type AudioConfig struct {
+	TempDir      string `envconfig:"TEMP_DIR" default:"/tmp/sttd"`
+	FileName     string `envconfig:"FILE_NAME" default:"last-recording.wav"`
+	SampleFormat string `envconfig:"SAMPLE_FORMAT" default:"wav"`
 }
 
-type TelemetryConfig struct {
-	Enabled        bool   `envconfig:"ENABLED" default:"false"`
-	ServiceName    string `envconfig:"SERVICE_NAME" default:"golang-api-template"`
-	ServiceVersion string `envconfig:"SERVICE_VERSION" default:"0.1.0"`
-	Exporter       string `envconfig:"EXPORTER" default:"stdout"`
+type TranscribeConfig struct {
+	BinaryPath string        `envconfig:"BINARY_PATH" default:""`
+	ModelPath  string        `envconfig:"MODEL_PATH" default:""`
+	Language   string        `envconfig:"LANGUAGE" default:"en"`
+	Timeout    time.Duration `envconfig:"TIMEOUT" default:"30s"`
+}
+
+type ClipboardConfig struct {
+	EnablePaste bool `envconfig:"ENABLE_PASTE" default:"true"`
+}
+
+type NotifyConfig struct {
+	Enabled bool `envconfig:"ENABLED" default:"false"`
 }
 
 func Load() (Config, error) {
 	cfg := Config{}
 
-	if err := envconfig.Process("APP", &cfg.App); err != nil {
+	if err := envconfig.Process("STTD_APP", &cfg.App); err != nil {
 		return Config{}, fmt.Errorf("load app config: %w", err)
 	}
 
-	if err := envconfig.Process("HTTP", &cfg.Server); err != nil {
-		return Config{}, fmt.Errorf("load server config: %w", err)
+	if err := envconfig.Process("STTD_TRIGGER", &cfg.Trigger); err != nil {
+		return Config{}, fmt.Errorf("load trigger config: %w", err)
 	}
 
-	if err := envconfig.Process("DATABASE", &cfg.Database); err != nil {
-		return Config{}, fmt.Errorf("load database config: %w", err)
+	if err := envconfig.Process("STTD_AUDIO", &cfg.Audio); err != nil {
+		return Config{}, fmt.Errorf("load audio config: %w", err)
 	}
 
-	if err := envconfig.Process("OTEL", &cfg.Telemetry); err != nil {
-		return Config{}, fmt.Errorf("load telemetry config: %w", err)
+	if err := envconfig.Process("STTD_TRANSCRIBE", &cfg.Transcribe); err != nil {
+		return Config{}, fmt.Errorf("load transcribe config: %w", err)
+	}
+
+	if err := envconfig.Process("STTD_CLIPBOARD", &cfg.Clipboard); err != nil {
+		return Config{}, fmt.Errorf("load clipboard config: %w", err)
+	}
+
+	if err := envconfig.Process("STTD_NOTIFY", &cfg.Notify); err != nil {
+		return Config{}, fmt.Errorf("load notify config: %w", err)
+	}
+
+	if err := cfg.validate(); err != nil {
+		return Config{}, err
 	}
 
 	return cfg, nil
+}
+
+func (c Config) validate() error {
+	if c.App.ShutdownTimeout <= 0 {
+		return fmt.Errorf("invalid configuration: shutdown timeout must be greater than zero")
+	}
+
+	if c.Trigger.DoubleTapWindow <= 0 {
+		return fmt.Errorf("invalid configuration: double tap window must be greater than zero")
+	}
+
+	if c.Audio.TempDir == "" {
+		return fmt.Errorf("invalid configuration: audio temp dir is required")
+	}
+
+	if c.Audio.FileName == "" {
+		return fmt.Errorf("invalid configuration: audio file name is required")
+	}
+
+	if c.Transcribe.Timeout <= 0 {
+		return fmt.Errorf("invalid configuration: transcribe timeout must be greater than zero")
+	}
+
+	return nil
 }

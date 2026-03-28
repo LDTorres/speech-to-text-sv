@@ -72,7 +72,7 @@ type AudioConfig struct {
 type TranscribeConfig struct {
 	BinaryPath string        `envconfig:"BINARY_PATH" default:""`
 	ModelPath  string        `envconfig:"MODEL_PATH" default:""`
-	Language   string        `envconfig:"LANGUAGE" default:"en"`
+	Language   string        `envconfig:"LANGUAGE" default:"es"`
 	Timeout    time.Duration `envconfig:"TIMEOUT" default:"30s"`
 }
 

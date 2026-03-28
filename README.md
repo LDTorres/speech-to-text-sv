@@ -77,10 +77,11 @@ make dev-setup PROFILE=linux
 make dev-setup PROFILE=steam_deck
 ```
 
-You can also select the model during setup:
+You can also select the model and language during setup:
 
 ```bash
 make dev-setup PROFILE=macos MODEL=small
+make dev-setup PROFILE=steam_deck MODEL=base LANGUAGE=es
 ```
 
 This does the following:
@@ -166,10 +167,19 @@ Install a release:
 ./install.sh --profile steam_deck --as-service
 ```
 
-You can also select the model during installation:
+Recommended for Spanish-first usage:
+
+```bash
+./install.sh --profile linux --language es
+./install.sh --profile steam_deck --language es
+./install.sh --profile steam_deck --language es --as-service
+```
+
+You can also select the model and language during installation:
 
 ```bash
 ./install.sh --profile steam_deck --model small
+./install.sh --profile steam_deck --model base --language es
 ```
 
 Change the model after installation:
@@ -205,6 +215,7 @@ Available templates:
 - [`.env.steam_deck.example`](./.env.steam_deck.example)
 
 Runtime uses a single `.env` file at the repository root or release root.
+The default transcription language is `es`.
 
 ### Public variables
 
@@ -259,7 +270,7 @@ These still exist in config, but currently provide little or no practical value 
 
 - `make run`
 - `make test`
-- `make dev-setup PROFILE=<macos|linux|steam_deck> [MODEL=<tiny|base|small>]`
+- `make dev-setup PROFILE=<macos|linux|steam_deck> [MODEL=<tiny|base|small>] [LANGUAGE=<code>]`
 - `make change-model [MODEL=<tiny|base|small>]`
 - `make build-whisper-cli`
 - `make build-release`

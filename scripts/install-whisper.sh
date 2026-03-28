@@ -24,6 +24,7 @@ SYSTEMD_UNIT_PATH="${SYSTEMD_USER_DIR}/${SERVICE_NAME}"
 SERVICE_TEMPLATE_PATH="${ROOT_DIR}/scripts/speech-to-text.service.template"
 AS_SERVICE=false
 MODEL_NAME="${STTD_DEFAULT_MODEL}"
+LANGUAGE_NAME="${STTD_TRANSCRIBE_LANGUAGE:-es}"
 
 WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION:-v1.8.4}"
 
@@ -42,7 +43,7 @@ need_cmd() {
 
 usage() {
   cat <<'EOF'
-usage: ./install.sh [--profile <linux|steam_deck|macos>] [--model <tiny|base|small>] [--as-service]
+usage: ./install.sh [--profile <linux|steam_deck|macos>] [--model <tiny|base|small>] [--language <code>] [--as-service]
 EOF
 }
 
@@ -67,6 +68,14 @@ parse_args() {
           exit 1
         fi
         MODEL_NAME="$2"
+        shift 2
+        ;;
+      --language)
+        if [[ $# -lt 2 ]]; then
+          printf 'missing value for --language\n' >&2
+          exit 1
+        fi
+        LANGUAGE_NAME="$2"
         shift 2
         ;;
       --help|-h)
@@ -112,7 +121,7 @@ ensure_env_file() {
   fi
 
   if ! grep -q '^STTD_PLATFORM_PROFILE=' "${ENV_FILE}"; then
-    set_env_value "STTD_PLATFORM_PROFILE" "${PROFILE_NAME}"
+    sttd_set_env_value "${ENV_FILE}" "STTD_PLATFORM_PROFILE" "${PROFILE_NAME}"
   fi
 }
 
@@ -124,7 +133,7 @@ configure_env_file() {
   sttd_set_env_value "${ENV_FILE}" "STTD_PLATFORM_PROFILE" "${PROFILE_NAME}"
   sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_BINARY_PATH" "${WHISPER_BINARY_PATH}"
   sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_MODEL_PATH" "${STTD_MODEL_PATH}"
-  sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_LANGUAGE" "auto"
+  sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_LANGUAGE" "${LANGUAGE_NAME}"
 }
 
 install_user_service() {
@@ -159,6 +168,7 @@ main() {
   printf 'whisper-cli available at: %s\n' "${WHISPER_BINARY_PATH}"
   printf 'selected model: %s\n' "${MODEL_NAME}"
   printf 'model %s: %s\n' "${STTD_MODEL_ACTION}" "${STTD_MODEL_PATH}"
+  printf 'selected language: %s\n' "${LANGUAGE_NAME}"
   printf '.env updated: %s\n' "${ENV_FILE}"
   if [[ "${AS_SERVICE}" == "true" ]]; then
     printf 'user service installed: %s\n' "${SYSTEMD_UNIT_PATH}"

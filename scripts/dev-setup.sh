@@ -9,6 +9,7 @@ source "${ROOT_DIR}/scripts/lib/model.sh"
 ENV_FILE="${ROOT_DIR}/.env"
 PROFILE_NAME=""
 MODEL_NAME="${STTD_DEFAULT_MODEL}"
+LANGUAGE_NAME="${STTD_TRANSCRIBE_LANGUAGE:-es}"
 
 WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION:-v1.8.4}"
 
@@ -34,7 +35,7 @@ need_cmd() {
 
 usage() {
   cat <<'EOF'
-usage: ./scripts/dev-setup.sh [--profile <macos|linux|steam_deck>] [--model <tiny|base|small>]
+usage: ./scripts/dev-setup.sh [--profile <macos|linux|steam_deck>] [--model <tiny|base|small>] [--language <code>]
 EOF
 }
 
@@ -87,6 +88,14 @@ parse_args() {
           exit 1
         fi
         MODEL_NAME="$2"
+        shift 2
+        ;;
+      --language)
+        if [[ $# -lt 2 ]]; then
+          printf 'missing value for --language\n' >&2
+          exit 1
+        fi
+        LANGUAGE_NAME="$2"
         shift 2
         ;;
       *)
@@ -169,7 +178,7 @@ configure_env_file() {
   sttd_set_env_value "${ENV_FILE}" "STTD_PLATFORM_PROFILE" "${PROFILE_NAME}"
   sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_BINARY_PATH" "${WHISPER_BINARY_PATH}"
   sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_MODEL_PATH" "${STTD_MODEL_PATH}"
-  sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_LANGUAGE" "auto"
+  sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_LANGUAGE" "${LANGUAGE_NAME}"
 }
 
 prepare_runtime_dirs() {
@@ -276,6 +285,7 @@ main() {
   printf 'whisper-cli available at: %s\n' "${WHISPER_BINARY_PATH}"
   printf 'selected model: %s\n' "${MODEL_NAME}"
   printf 'model %s: %s\n' "${STTD_MODEL_ACTION}" "${STTD_MODEL_PATH}"
+  printf 'selected language: %s\n' "${LANGUAGE_NAME}"
   printf '.env updated: %s\n' "${ENV_FILE}"
   printf 'run the app with: go run ./cmd/sttd\n'
 }

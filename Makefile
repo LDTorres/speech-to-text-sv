@@ -1,6 +1,7 @@
 GO ?= go
 PROFILE ?=
 MODEL ?=
+LANGUAGE ?=
 
 .PHONY: run test dev-setup change-model build-whisper-cli build-release
 
@@ -11,7 +12,7 @@ test:
 	GOCACHE=$${GOCACHE:-/tmp/gocache} $(GO) test ./...
 
 dev-setup:
-	./scripts/dev-setup.sh $(if $(PROFILE),--profile $(PROFILE),) $(if $(MODEL),--model $(MODEL),)
+	./scripts/dev-setup.sh $(if $(PROFILE),--profile $(PROFILE),) $(if $(MODEL),--model $(MODEL),) $(if $(LANGUAGE),--language $(LANGUAGE),)
 
 change-model:
 	./scripts/change-model.sh $(if $(MODEL),--model $(MODEL),)

@@ -20,6 +20,7 @@ source "${ROOT_DIR}/scripts/lib/model.sh"
 ENV_FILE="${ROOT_DIR}/.env"
 MODEL_DIR="${ROOT_DIR}/.sttd/models"
 MODEL_NAME=""
+SERVICE_NAME="speech-to-text.service"
 
 usage() {
   cat <<'EOF'
@@ -77,6 +78,19 @@ select_model() {
   MODEL_NAME="$(sttd_prompt_for_model "${current_model:-${STTD_DEFAULT_MODEL}}")"
 }
 
+restart_user_service_if_running() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+
+  if ! systemctl --user is-active --quiet "${SERVICE_NAME}"; then
+    return
+  fi
+
+  systemctl --user restart "${SERVICE_NAME}"
+  printf 'restarted user service: %s\n' "${SERVICE_NAME}"
+}
+
 main() {
   parse_args "$@"
 
@@ -85,6 +99,7 @@ main() {
 
   sttd_ensure_model_downloaded "${MODEL_NAME}" "${MODEL_DIR}"
   sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_MODEL_PATH" "${STTD_MODEL_PATH}"
+  restart_user_service_if_running
 
   printf '\nselected model: %s\n' "${MODEL_NAME}"
   printf 'model %s: %s\n' "${STTD_MODEL_ACTION}" "${STTD_MODEL_PATH}"

@@ -78,7 +78,7 @@ func TestPWRecordRecorder_Start_Twice_ReturnsError(t *testing.T) {
 func TestPWRecordRecorder_ProcessFailure_ReturnsWrappedError(t *testing.T) {
 	t.Parallel()
 
-	proc := &fakeProcess{waitErr: errors.New("exit status 1")}
+	proc := &fakeProcess{waitErr: errors.New("exit status 1"), stderr: "device failure"}
 	recorder := NewPWRecordRecorder(t.TempDir(), "recording.wav", "")
 	recorder.commandName = testExecutableName(t)
 	recorder.newProcess = func(ctx context.Context, name string, args []string) process {
@@ -89,7 +89,26 @@ func TestPWRecordRecorder_ProcessFailure_ReturnsWrappedError(t *testing.T) {
 
 	_, err := recorder.Stop(context.Background())
 
-	require.EqualError(t, err, "stop pw-record: exit status 1")
+	require.EqualError(t, err, "stop pw-record: exit status 1 (stderr: device failure)")
+}
+
+func TestPWRecordRecorder_Stop_AllowsUsableRecordingWhenProcessExitsNonZero(t *testing.T) {
+	t.Parallel()
+
+	proc := &fakeProcess{waitErr: errors.New("exit status 1")}
+	recorder := NewPWRecordRecorder(t.TempDir(), "recording.wav", "")
+	recorder.commandName = testExecutableName(t)
+	recorder.newProcess = func(ctx context.Context, name string, args []string) process {
+		return proc
+	}
+
+	require.NoError(t, recorder.Start(context.Background()))
+	require.NoError(t, os.WriteFile(filepath.Join(recorder.tempDir, recorder.fileName), []byte("wav"), 0o644))
+
+	recording, err := recorder.Stop(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(recorder.tempDir, recorder.fileName), recording.Path)
 }
 
 func TestPWRecordRecorder_Stop_UsesTimeout(t *testing.T) {
@@ -107,7 +126,7 @@ func TestPWRecordRecorder_Stop_UsesTimeout(t *testing.T) {
 
 	_, err := recorder.Stop(context.Background())
 
-	require.EqualError(t, err, "stop pw-record after kill: exit status 9")
+	require.EqualError(t, err, "stop pw-record after kill: exit status 9 (stderr: )")
 	require.True(t, proc.killed)
 }
 
@@ -115,6 +134,7 @@ type fakeProcess struct {
 	started     bool
 	interrupted bool
 	waitErr     error
+	stderr      string
 }
 
 func (p *fakeProcess) Start() error {
@@ -133,6 +153,10 @@ func (p *fakeProcess) Signal(sig os.Signal) error {
 
 func (p *fakeProcess) Kill() error {
 	return nil
+}
+
+func (p *fakeProcess) Stderr() string {
+	return p.stderr
 }
 
 type blockingProcess struct {
@@ -166,6 +190,10 @@ func (p *blockingProcess) Kill() error {
 	p.killed = true
 	close(p.waitCh)
 	return nil
+}
+
+func (p *blockingProcess) Stderr() string {
+	return ""
 }
 
 func testExecutableName(t *testing.T) string {

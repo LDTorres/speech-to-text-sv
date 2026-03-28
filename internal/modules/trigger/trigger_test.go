@@ -13,7 +13,7 @@ import (
 func TestTriggerWatcher_EmitsPress(t *testing.T) {
 	t.Parallel()
 
-	watcher, source := newTestWatcher(400 * time.Millisecond)
+	watcher, source := newTestWatcher(modeHold, 400*time.Millisecond)
 	ctx := context.Background()
 
 	require.NoError(t, watcher.Start(ctx))
@@ -32,7 +32,7 @@ func TestTriggerWatcher_EmitsPress(t *testing.T) {
 func TestTriggerWatcher_EmitsRelease(t *testing.T) {
 	t.Parallel()
 
-	watcher, source := newTestWatcher(400 * time.Millisecond)
+	watcher, source := newTestWatcher(modeHold, 400*time.Millisecond)
 	ctx := context.Background()
 
 	require.NoError(t, watcher.Start(ctx))
@@ -51,7 +51,7 @@ func TestTriggerWatcher_EmitsRelease(t *testing.T) {
 func TestTriggerWatcher_TwoQuickPresses_EmitDoubleTap(t *testing.T) {
 	t.Parallel()
 
-	watcher, source := newTestWatcher(400 * time.Millisecond)
+	watcher, source := newTestWatcher(modeHold, 400*time.Millisecond)
 	ctx := context.Background()
 
 	require.NoError(t, watcher.Start(ctx))
@@ -76,7 +76,7 @@ func TestTriggerWatcher_TwoQuickPresses_EmitDoubleTap(t *testing.T) {
 func TestTriggerWatcher_PressesOutsideWindow_DoNotEmitDoubleTap(t *testing.T) {
 	t.Parallel()
 
-	watcher, source := newTestWatcher(400 * time.Millisecond)
+	watcher, source := newTestWatcher(modeHold, 400*time.Millisecond)
 	ctx := context.Background()
 
 	require.NoError(t, watcher.Start(ctx))
@@ -101,7 +101,7 @@ func TestTriggerWatcher_PressesOutsideWindow_DoNotEmitDoubleTap(t *testing.T) {
 func TestTriggerWatcher_Stop_UnblocksRunLoop(t *testing.T) {
 	t.Parallel()
 
-	watcher, source := newTestWatcher(400 * time.Millisecond)
+	watcher, source := newTestWatcher(modeHold, 400*time.Millisecond)
 	ctx := context.Background()
 
 	require.NoError(t, watcher.Start(ctx))
@@ -122,9 +122,54 @@ func TestTriggerWatcher_Stop_UnblocksRunLoop(t *testing.T) {
 	require.Equal(t, 1, source.stopCalls())
 }
 
-func newTestWatcher(doubleTapWindow time.Duration) (*TriggerWatcher, *fakeSource) {
+func TestTriggerWatcher_ToggleMode_PressesAlternateBetweenStartAndStop(t *testing.T) {
+	t.Parallel()
+
+	watcher, source := newTestWatcher(modeToggle, 400*time.Millisecond)
+	ctx := context.Background()
+
+	require.NoError(t, watcher.Start(ctx))
+	defer func() {
+		require.NoError(t, watcher.Stop(context.Background()))
+	}()
+
+	firstAt := time.Unix(400, 0).UTC()
+	secondAt := firstAt.Add(100 * time.Millisecond)
+
+	source.emit(SourceEvent{Kind: SourceEventPress, At: firstAt})
+	source.emit(SourceEvent{Kind: SourceEventPress, At: secondAt})
+
+	firstEvent := readEvent(t, watcher.Events())
+	secondEvent := readEvent(t, watcher.Events())
+
+	require.Equal(t, EventPress, firstEvent.Kind)
+	require.Equal(t, EventRelease, secondEvent.Kind)
+	require.Equal(t, secondAt, secondEvent.At)
+}
+
+func TestTriggerWatcher_ToggleMode_IgnoresSourceRelease(t *testing.T) {
+	t.Parallel()
+
+	watcher, source := newTestWatcher(modeToggle, 400*time.Millisecond)
+	ctx := context.Background()
+
+	require.NoError(t, watcher.Start(ctx))
+	defer func() {
+		require.NoError(t, watcher.Stop(context.Background()))
+	}()
+
+	source.emit(SourceEvent{Kind: SourceEventRelease, At: time.Unix(500, 0).UTC()})
+
+	select {
+	case event := <-watcher.Events():
+		t.Fatalf("unexpected trigger event: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func newTestWatcher(mode string, doubleTapWindow time.Duration) (*TriggerWatcher, *fakeSource) {
 	source := newFakeSource()
-	watcher := NewWatcher(zap.NewNop(), source, "fake", doubleTapWindow)
+	watcher := NewWatcher(zap.NewNop(), source, "fake", mode, doubleTapWindow)
 	return watcher, source
 }
 

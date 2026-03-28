@@ -17,6 +17,7 @@ func TestConfigLoad_DefaultMacHotkeyValues(t *testing.T) {
 	cfg, err := Load()
 
 	require.NoError(t, err)
+	require.Equal(t, TriggerModeHold, cfg.Trigger.Mode)
 	require.Equal(t, "cmd+shift", cfg.Trigger.Hotkey.Modifiers)
 	require.Equal(t, "space", cfg.Trigger.Hotkey.Key)
 }
@@ -43,6 +44,25 @@ func TestConfigLoad_InvalidMacHotkey_ReturnsError(t *testing.T) {
 	_, err := Load()
 
 	require.EqualError(t, err, `invalid configuration: unsupported trigger hotkey modifier "weird"`)
+}
+
+func TestConfigLoad_InvalidTriggerMode_ReturnsError(t *testing.T) {
+	t.Setenv("STTD_TRIGGER_MODE", "weird")
+
+	_, err := Load()
+
+	require.EqualError(t, err, `invalid configuration: unsupported trigger mode "weird"`)
+}
+
+func TestConfigLoad_EmptyHotkeyModifiers_AreAllowed(t *testing.T) {
+	t.Setenv("STTD_TRIGGER_HOTKEY_MODIFIERS", "")
+	t.Setenv("STTD_TRIGGER_HOTKEY_KEY", "f13")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, "", cfg.Trigger.Hotkey.Modifiers)
+	require.Equal(t, "f13", cfg.Trigger.Hotkey.Key)
 }
 
 func TestConfigLoad_SteamDeckTriggerEnvValues(t *testing.T) {
@@ -82,6 +102,7 @@ func TestResolvePlatform_AutoDarwin_UsesMacosDevDefaults(t *testing.T) {
 	require.Equal(t, PlatformProfileMacOSDev, resolved.Profile)
 	require.Equal(t, "darwin", resolved.TargetOS)
 	require.Equal(t, TriggerSourceHotkey, resolved.Trigger.Source)
+	require.Equal(t, TriggerModeHold, resolved.Trigger.Mode)
 	require.Equal(t, []string{"cmd", "shift"}, resolved.Trigger.Hotkey.Modifiers)
 	require.Equal(t, "space", resolved.Trigger.Hotkey.Key)
 	require.Equal(t, AudioBackendMacOSCapture, resolved.Audio.Backend)
@@ -97,6 +118,7 @@ func TestResolvePlatform_MacOSDev_UsesHotkeyAndMacCapture(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, TriggerSourceHotkey, resolved.Trigger.Source)
+	require.Equal(t, TriggerModeHold, resolved.Trigger.Mode)
 	require.Equal(t, []string{"cmd", "shift"}, resolved.Trigger.Hotkey.Modifiers)
 	require.Equal(t, "space", resolved.Trigger.Hotkey.Key)
 	require.Equal(t, AudioBackendMacOSCapture, resolved.Audio.Backend)
@@ -111,6 +133,7 @@ func TestResolvePlatform_AutoLinux_UsesLinuxDesktopDefaults(t *testing.T) {
 	require.Equal(t, PlatformProfileLinuxDesktop, resolved.Profile)
 	require.Equal(t, "linux", resolved.TargetOS)
 	require.Equal(t, TriggerSourceStub, resolved.Trigger.Source)
+	require.Equal(t, TriggerModeHold, resolved.Trigger.Mode)
 	require.Equal(t, AudioBackendFile, resolved.Audio.Backend)
 	require.Equal(t, "linux", resolved.Clipboard.TargetOS)
 	require.Equal(t, "wl-copy", resolved.Clipboard.PreferredCopy)
@@ -130,6 +153,7 @@ func TestResolvePlatform_SteamDeck_UsesEvdevAndPWRecordDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, PlatformProfileSteamDeck, resolved.Profile)
 	require.Equal(t, TriggerSourceSteam, resolved.Trigger.Source)
+	require.Equal(t, TriggerModeHold, resolved.Trigger.Mode)
 	require.Equal(t, "/dev/input/event0", resolved.Trigger.DevicePath)
 	require.Equal(t, uint16(1), resolved.Trigger.EventType)
 	require.Equal(t, uint16(1337), resolved.Trigger.EventCode)
@@ -138,6 +162,48 @@ func TestResolvePlatform_SteamDeck_UsesEvdevAndPWRecordDefaults(t *testing.T) {
 	require.Equal(t, "linux", resolved.Clipboard.TargetOS)
 	require.Equal(t, "wl-copy", resolved.Clipboard.PreferredCopy)
 	require.Equal(t, PasteMethodWType, resolved.Clipboard.PreferredPaste)
+}
+
+func TestResolvePlatform_SteamDeck_AllowsHotkeyOverride(t *testing.T) {
+	resolved, err := Config{
+		Platform: PlatformConfig{Profile: PlatformProfileSteamDeck},
+		Trigger: TriggerConfig{
+			Source: TriggerSourceHotkey,
+			Mode:   TriggerModeToggle,
+			Hotkey: HotkeyConfig{
+				Modifiers: "",
+				Key:       "f13",
+			},
+		},
+	}.ResolvePlatform("linux")
+
+	require.NoError(t, err)
+	require.Equal(t, PlatformProfileSteamDeck, resolved.Profile)
+	require.Equal(t, TriggerSourceHotkey, resolved.Trigger.Source)
+	require.Equal(t, TriggerModeToggle, resolved.Trigger.Mode)
+	require.Equal(t, []string{}, resolved.Trigger.Hotkey.Modifiers)
+	require.Equal(t, "f13", resolved.Trigger.Hotkey.Key)
+}
+
+func TestResolvePlatform_LinuxDesktop_AllowsHotkeyOverride(t *testing.T) {
+	resolved, err := Config{
+		Platform: PlatformConfig{Profile: PlatformProfileLinuxDesktop},
+		Trigger: TriggerConfig{
+			Source: TriggerSourceHotkey,
+			Mode:   TriggerModeToggle,
+			Hotkey: HotkeyConfig{
+				Modifiers: "",
+				Key:       "f13",
+			},
+		},
+	}.ResolvePlatform("linux")
+
+	require.NoError(t, err)
+	require.Equal(t, PlatformProfileLinuxDesktop, resolved.Profile)
+	require.Equal(t, TriggerSourceHotkey, resolved.Trigger.Source)
+	require.Equal(t, TriggerModeToggle, resolved.Trigger.Mode)
+	require.Equal(t, []string{}, resolved.Trigger.Hotkey.Modifiers)
+	require.Equal(t, "f13", resolved.Trigger.Hotkey.Key)
 }
 
 func TestResolvePlatform_ComponentOverride_TakesPrecedenceOverProfile(t *testing.T) {

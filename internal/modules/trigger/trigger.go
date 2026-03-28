@@ -18,6 +18,11 @@ const (
 	EventDoubleTap EventKind = "double_tap"
 )
 
+const (
+	modeHold   = "hold"
+	modeToggle = "toggle"
+)
+
 type SourceEventKind string
 
 const (
@@ -60,6 +65,7 @@ type TriggerWatcher struct {
 	logger          *zap.Logger
 	source          Source
 	sourceName      string
+	mode            string
 	doubleTapWindow time.Duration
 
 	mu     sync.Mutex
@@ -68,11 +74,12 @@ type TriggerWatcher struct {
 	done   chan struct{}
 }
 
-func NewWatcher(logger *zap.Logger, source Source, sourceName string, doubleTapWindow time.Duration) *TriggerWatcher {
+func NewWatcher(logger *zap.Logger, source Source, sourceName string, mode string, doubleTapWindow time.Duration) *TriggerWatcher {
 	return &TriggerWatcher{
 		logger:          logger,
 		source:          source,
 		sourceName:      sourceName,
+		mode:            mode,
 		doubleTapWindow: doubleTapWindow,
 		events:          make(chan Event, 8),
 	}
@@ -106,6 +113,7 @@ func (w *TriggerWatcher) Start(ctx context.Context) error {
 	w.logger.Info(
 		"trigger watcher started",
 		zap.String("source", w.sourceName),
+		zap.String("mode", w.mode),
 		zap.Duration("double_tap_window", w.doubleTapWindow),
 	)
 
@@ -144,6 +152,7 @@ func (w *TriggerWatcher) run(ctx context.Context, done chan struct{}) {
 	defer close(done)
 
 	var lastPressAt time.Time
+	var toggleActive bool
 
 	for {
 		select {
@@ -161,6 +170,23 @@ func (w *TriggerWatcher) run(ctx context.Context, done chan struct{}) {
 
 			switch rawEvent.Kind {
 			case SourceEventPress:
+				if w.mode == modeToggle {
+					eventKind := EventPress
+					if toggleActive {
+						eventKind = EventRelease
+					}
+
+					toggleActive = !toggleActive
+					if !w.emit(ctx, Event{
+						Kind:     eventKind,
+						At:       eventAt,
+						Metadata: rawEvent.Metadata,
+					}) {
+						return
+					}
+					continue
+				}
+
 				if w.isDoubleTap(lastPressAt, eventAt) {
 					lastPressAt = eventAt
 					if !w.emit(ctx, Event{
@@ -182,6 +208,10 @@ func (w *TriggerWatcher) run(ctx context.Context, done chan struct{}) {
 					return
 				}
 			case SourceEventRelease:
+				if w.mode == modeToggle {
+					continue
+				}
+
 				if !w.emit(ctx, Event{
 					Kind:     EventRelease,
 					At:       eventAt,

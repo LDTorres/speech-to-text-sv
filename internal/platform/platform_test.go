@@ -1,9 +1,12 @@
+//go:build linux
+
 package platform
 
 import (
 	"testing"
 
 	"github.com/LDTorres/speech-to-text-sv/internal/config"
+	"github.com/LDTorres/speech-to-text-sv/internal/modules/trigger"
 	linuxplatform "github.com/LDTorres/speech-to-text-sv/internal/platform/linux"
 	"github.com/stretchr/testify/require"
 )
@@ -36,5 +39,17 @@ func TestPlatform_NewRecorder_UsesPWRecord(t *testing.T) {
 	})
 
 	_, ok := recorder.(*linuxplatform.PWRecordRecorder)
+	require.True(t, ok)
+}
+
+func TestPlatform_NewTriggerWatcher_UsesStubForLinuxDesktopDefault(t *testing.T) {
+	source := newTriggerSource(config.ResolvedPlatform{
+		Profile: config.PlatformProfileLinuxDesktop,
+		Trigger: config.ResolvedTrigger{
+			Source: config.TriggerSourceStub,
+		},
+	})
+
+	_, ok := source.(*trigger.StubSource)
 	require.True(t, ok)
 }

@@ -1,6 +1,7 @@
 package linux
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ type process interface {
 	Wait() error
 	Signal(os.Signal) error
 	Kill() error
+	Stderr() string
 }
 
 type processFactory func(ctx context.Context, name string, args []string) process
@@ -129,7 +131,10 @@ func (r *PWRecordRecorder) Stop(ctx context.Context) (audio.Recording, error) {
 	select {
 	case err := <-waitCh:
 		if err != nil {
-			return audio.Recording{}, fmt.Errorf("stop pw-record: %w", err)
+			if recordingLooksUsable(recording.Path) {
+				return recording, nil
+			}
+			return audio.Recording{}, fmt.Errorf("stop pw-record: %w (stderr: %s)", err, proc.Stderr())
 		}
 	case <-time.After(r.stopTimeout):
 		if err := proc.Kill(); err != nil {
@@ -137,7 +142,7 @@ func (r *PWRecordRecorder) Stop(ctx context.Context) (audio.Recording, error) {
 		}
 		err := <-waitCh
 		if err != nil {
-			return audio.Recording{}, fmt.Errorf("stop pw-record after kill: %w", err)
+			return audio.Recording{}, fmt.Errorf("stop pw-record after kill: %w (stderr: %s)", err, proc.Stderr())
 		}
 	case <-ctx.Done():
 		return audio.Recording{}, ctx.Err()
@@ -159,10 +164,21 @@ func (r *PWRecordRecorder) buildArgs(outputPath string) []string {
 }
 
 type execProcess struct {
-	cmd *exec.Cmd
+	cmd    *exec.Cmd
+	stderr bytes.Buffer
+}
+
+func recordingLooksUsable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+
+	return !info.IsDir() && info.Size() > 0
 }
 
 func (p *execProcess) Start() error {
+	p.cmd.Stderr = &p.stderr
 	return p.cmd.Start()
 }
 
@@ -182,4 +198,8 @@ func (p *execProcess) Kill() error {
 		return os.ErrProcessDone
 	}
 	return p.cmd.Process.Kill()
+}
+
+func (p *execProcess) Stderr() string {
+	return p.stderr.String()
 }

@@ -35,6 +35,11 @@ const (
 )
 
 const (
+	TriggerModeHold   = "hold"
+	TriggerModeToggle = "toggle"
+)
+
+const (
 	AudioBackendFile         = "file"
 	AudioBackendMacOSCapture = "macos_capture"
 	AudioBackendLinuxCapture = "linux_capture"
@@ -62,6 +67,7 @@ type HotkeyConfig struct {
 
 type TriggerConfig struct {
 	Source          string        `envconfig:"SOURCE"`
+	Mode            string        `envconfig:"MODE" default:"hold"`
 	DoubleTapWindow time.Duration `envconfig:"DOUBLE_TAP_WINDOW" default:"400ms"`
 	Hotkey          HotkeyConfig
 	DevicePath      string `envconfig:"DEVICE_PATH" default:""`
@@ -102,6 +108,7 @@ type ResolvedPlatform struct {
 
 type ResolvedTrigger struct {
 	Source      string
+	Mode        string
 	Hotkey      ResolvedHotkey
 	DevicePath  string
 	EventType   uint16
@@ -184,6 +191,10 @@ func (c Config) validate() error {
 		return fmt.Errorf("invalid configuration: unsupported trigger source %q", c.Trigger.Source)
 	}
 
+	if !isValidTriggerMode(c.Trigger.Mode) {
+		return fmt.Errorf("invalid configuration: unsupported trigger mode %q", c.Trigger.Mode)
+	}
+
 	if _, err := parseHotkey(c.Trigger.Hotkey); err != nil {
 		return err
 	}
@@ -217,6 +228,9 @@ func (c Config) ResolvePlatform(goos string) (ResolvedPlatform, error) {
 
 	if c.Trigger.Source != "" {
 		resolved.Trigger.Source = c.Trigger.Source
+	}
+	if c.Trigger.Mode != "" {
+		resolved.Trigger.Mode = c.Trigger.Mode
 	}
 
 	if resolved.Trigger.Source == TriggerSourceHotkey {
@@ -288,6 +302,15 @@ func isValidTriggerSource(source string) bool {
 	}
 }
 
+func isValidTriggerMode(mode string) bool {
+	switch mode {
+	case TriggerModeHold, TriggerModeToggle:
+		return true
+	default:
+		return false
+	}
+}
+
 func resolveProfile(profile PlatformProfile, goos string) (PlatformProfile, error) {
 	switch profile {
 	case PlatformProfileAuto:
@@ -322,6 +345,7 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 			TargetOS: "darwin",
 			Trigger: ResolvedTrigger{
 				Source: TriggerSourceHotkey,
+				Mode:   TriggerModeHold,
 				Hotkey: ResolvedHotkey{
 					Modifiers: []string{"cmd", "shift"},
 					Key:       "space",
@@ -343,6 +367,7 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 			TargetOS: "linux",
 			Trigger: ResolvedTrigger{
 				Source:      TriggerSourceSteam,
+				Mode:        TriggerModeHold,
 				EventType:   1,
 				ActiveValue: 1,
 			},
@@ -362,6 +387,7 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 			TargetOS: "linux",
 			Trigger: ResolvedTrigger{
 				Source: TriggerSourceStub,
+				Mode:   TriggerModeHold,
 			},
 			Audio: ResolvedAudio{
 				Backend:     AudioBackendFile,
@@ -383,11 +409,11 @@ func validateResolvedTrigger(profile PlatformProfile, source string) error {
 			return nil
 		}
 	case PlatformProfileSteamDeck:
-		if source == TriggerSourceSteam || source == TriggerSourceStub {
+		if source == TriggerSourceSteam || source == TriggerSourceHotkey || source == TriggerSourceStub {
 			return nil
 		}
 	case PlatformProfileLinuxDesktop:
-		if source == TriggerSourceStub {
+		if source == TriggerSourceHotkey || source == TriggerSourceStub {
 			return nil
 		}
 	}
@@ -433,11 +459,11 @@ func parseHotkey(cfg HotkeyConfig) (ResolvedHotkey, error) {
 }
 
 func normalizeHotkeyModifiers(value string) ([]string, error) {
-	parts := strings.Split(strings.TrimSpace(value), "+")
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("invalid configuration: trigger hotkey modifiers are required")
+	if strings.TrimSpace(value) == "" {
+		return []string{}, nil
 	}
 
+	parts := strings.Split(strings.TrimSpace(value), "+")
 	seen := map[string]bool{}
 	modifiers := make([]string, 0, len(parts))
 
@@ -459,10 +485,6 @@ func normalizeHotkeyModifiers(value string) ([]string, error) {
 
 		seen[token] = true
 		modifiers = append(modifiers, token)
-	}
-
-	if len(modifiers) == 0 {
-		return nil, fmt.Errorf("invalid configuration: trigger hotkey modifiers are required")
 	}
 
 	return modifiers, nil
@@ -487,7 +509,7 @@ func normalizeHotkeyKey(value string) (string, error) {
 
 	if strings.HasPrefix(key, "f") {
 		switch key {
-		case "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12":
+		case "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20":
 			return key, nil
 		}
 	}

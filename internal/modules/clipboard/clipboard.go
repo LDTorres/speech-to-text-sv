@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -32,6 +33,7 @@ type commandSpec struct {
 
 type commandExecutor func(ctx context.Context, spec commandSpec) error
 type pathLookup func(string) (string, error)
+type envLookup func(string) string
 
 type SystemClipboard struct {
 	logger         *zap.Logger
@@ -40,6 +42,7 @@ type SystemClipboard struct {
 	preferredCopy  string
 	preferredPaste string
 	lookupPath     pathLookup
+	lookupEnv      envLookup
 	execCommand    commandExecutor
 
 	mu       sync.Mutex
@@ -62,6 +65,7 @@ func NewSystemForConfig(logger *zap.Logger, enablePaste bool, targetOS string, p
 		preferredCopy:  preferredCopy,
 		preferredPaste: preferredPaste,
 		lookupPath:     exec.LookPath,
+		lookupEnv:      os.Getenv,
 		execCommand:    runCommand,
 	}
 }
@@ -79,6 +83,10 @@ func (c *SystemClipboard) Copy(ctx context.Context, text string) error {
 
 	spec, err := c.resolveCopyCommand(text)
 	if err != nil {
+		if errors.Is(err, ErrCopyUnavailable) && c.canTypeDirectly() {
+			c.logger.Info("clipboard copy skipped; direct typing paste is available", zap.Int("text_length", len(text)))
+			return nil
+		}
 		return err
 	}
 
@@ -133,6 +141,18 @@ func (c *SystemClipboard) resolveCopyCommand(text string) (commandSpec, error) {
 		return commandSpec{}, ErrCopyUnavailable
 	}
 
+	if c.shouldPreferX11Clipboard() {
+		if _, err := c.lookupPath("xclip"); err == nil {
+			return commandSpec{
+				name:  "xclip",
+				args:  []string{"-selection", "clipboard", "-in"},
+				stdin: text,
+			}, nil
+		}
+
+		return commandSpec{}, ErrCopyUnavailable
+	}
+
 	if c.preferredCopy == "xclip" {
 		if _, err := c.lookupPath("xclip"); err == nil {
 			return commandSpec{
@@ -173,6 +193,15 @@ func (c *SystemClipboard) resolvePasteCommand(text string) (commandSpec, error) 
 		return commandSpec{}, ErrPasteUnavailable
 	}
 
+	if c.shouldPreferX11Clipboard() {
+		if _, err := c.lookupPath("xdotool"); err == nil {
+			return commandSpec{
+				name: "xdotool",
+				args: []string{"type", "--clearmodifiers", "--delay", "1", text},
+			}, nil
+		}
+	}
+
 	if c.preferredPaste == "xdotool" {
 		if _, err := c.lookupPath("xdotool"); err == nil {
 			return commandSpec{
@@ -197,6 +226,26 @@ func (c *SystemClipboard) resolvePasteCommand(text string) (commandSpec, error) 
 	}
 
 	return commandSpec{}, ErrPasteUnavailable
+}
+
+func (c *SystemClipboard) shouldPreferX11Clipboard() bool {
+	if c.lookupEnv == nil {
+		return false
+	}
+
+	display := c.lookupEnv("DISPLAY")
+	waylandDisplay := c.lookupEnv("WAYLAND_DISPLAY")
+
+	return display != "" && waylandDisplay == ""
+}
+
+func (c *SystemClipboard) canTypeDirectly() bool {
+	if !c.shouldPreferX11Clipboard() {
+		return false
+	}
+
+	_, err := c.lookupPath("xdotool")
+	return err == nil
 }
 
 func runCommand(ctx context.Context, spec commandSpec) error {

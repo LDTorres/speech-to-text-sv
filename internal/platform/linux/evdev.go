@@ -132,7 +132,7 @@ func (s *EvdevSource) run(ctx context.Context, done chan struct{}, reader eventR
 	}
 }
 
-func (s *EvdevSource) mapEvent(rawEvent inputEvent) (trigger.SourceEvent, bool) {
+func (s *EvdevSource) mapEvent(rawEvent InputEvent) (trigger.SourceEvent, bool) {
 	if rawEvent.Type != s.eventType || rawEvent.Code != s.eventCode {
 		return trigger.SourceEvent{}, false
 	}
@@ -153,18 +153,18 @@ func (s *EvdevSource) mapEvent(rawEvent inputEvent) (trigger.SourceEvent, bool) 
 	}
 }
 
-type inputEvent struct {
+type InputEvent struct {
 	At    time.Time
 	Type  uint16
 	Code  uint16
 	Value int32
 }
 
-func decodeInputEvent(buffer []byte) inputEvent {
+func decodeInputEvent(buffer []byte) InputEvent {
 	seconds := int64(binary.LittleEndian.Uint64(buffer[0:8]))
 	micros := int64(binary.LittleEndian.Uint64(buffer[8:16]))
 
-	return inputEvent{
+	return InputEvent{
 		At:    time.Unix(seconds, micros*int64(time.Microsecond)).UTC(),
 		Type:  binary.LittleEndian.Uint16(buffer[16:18]),
 		Code:  binary.LittleEndian.Uint16(buffer[18:20]),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -63,6 +64,8 @@ func NewService(
 }
 
 func (s *SessionService) HandleTriggerPressed(ctx context.Context) error {
+	s.logger.Info("trigger pressed")
+
 	if err := s.reserveRecording(); err != nil {
 		return err
 	}
@@ -79,6 +82,8 @@ func (s *SessionService) HandleTriggerPressed(ctx context.Context) error {
 }
 
 func (s *SessionService) HandleTriggerReleased(ctx context.Context) error {
+	s.logger.Info("trigger released")
+
 	if err := s.finishRecording(); err != nil {
 		return err
 	}
@@ -88,19 +93,33 @@ func (s *SessionService) HandleTriggerReleased(ctx context.Context) error {
 		return fmt.Errorf("stop recording: %w", err)
 	}
 
+	fields := s.recordingLogFields(recording)
+	s.logger.Info("recording finalized", fields...)
+	s.logger.Info("transcription started", fields...)
+
 	transcript, err := s.transcriber.TranscribeFile(ctx, recording.Path)
 	if err != nil {
 		s.clearTranscript()
+		s.logger.Error("transcription failed", append(fields, zap.Error(err))...)
 		return fmt.Errorf("%w: %s", ErrTranscriptionFailed, err)
 	}
 
 	s.storeTranscript(transcript.Text)
+	s.logger.Info(
+		"transcription completed",
+		append(fields,
+			zap.Duration("transcription_duration", transcript.Duration),
+			zap.Int("transcript_length", len(transcript.Text)),
+		)...,
+	)
 
 	if err := s.clipboard.Copy(ctx, transcript.Text); err != nil {
+		s.logger.Error("copy transcript failed", append(fields, zap.Error(err), zap.Int("transcript_length", len(transcript.Text)))...)
 		return fmt.Errorf("copy transcript: %w", err)
 	}
 
 	if err := s.clipboard.Paste(ctx); err != nil {
+		s.logger.Error("paste transcript failed", append(fields, zap.Error(err), zap.Int("transcript_length", len(transcript.Text)))...)
 		return fmt.Errorf("%w: %s", ErrPasteFailed, err)
 	}
 
@@ -191,4 +210,29 @@ func (s *SessionService) lastTranscript() (string, bool) {
 	}
 
 	return s.state.lastTranscript, true
+}
+
+func (s *SessionService) recordingLogFields(recording audio.Recording) []zap.Field {
+	fields := []zap.Field{
+		zap.String("recording_path", recording.Path),
+		zap.Time("recording_started_at", recording.StartedAt),
+		zap.Time("recording_stopped_at", recording.StoppedAt),
+		zap.Duration("recording_duration", recording.StoppedAt.Sub(recording.StartedAt)),
+	}
+
+	info, err := os.Stat(recording.Path)
+	if err != nil {
+		s.logger.Warn(
+			"stat recording file",
+			zap.String("recording_path", recording.Path),
+			zap.Error(err),
+		)
+		return fields
+	}
+
+	if !info.IsDir() {
+		fields = append(fields, zap.Int64("recording_size_bytes", info.Size()))
+	}
+
+	return fields
 }

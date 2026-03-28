@@ -55,4 +55,4 @@ main() {
   printf 'go binaries exported to %s\n' "${OUTPUT_DIR}"
 }
 
-main \"$@\"
+main "$@"

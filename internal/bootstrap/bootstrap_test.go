@@ -9,6 +9,11 @@ import (
 )
 
 func TestBootstrap_New_WiresRequiredDependencies(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Setenv("STTD_PLATFORM_PROFILE", "macos")
+	} else {
+		t.Setenv("STTD_PLATFORM_PROFILE", "linux")
+	}
 	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
 	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
 
@@ -21,7 +26,11 @@ func TestBootstrap_New_WiresRequiredDependencies(t *testing.T) {
 }
 
 func TestBootstrap_New_UsesResolvedPlatformProfile(t *testing.T) {
-	t.Setenv("STTD_PLATFORM_PROFILE", "auto")
+	if runtime.GOOS == "darwin" {
+		t.Setenv("STTD_PLATFORM_PROFILE", "macos")
+	} else {
+		t.Setenv("STTD_PLATFORM_PROFILE", "linux")
+	}
 	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
 	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
 
@@ -33,17 +42,17 @@ func TestBootstrap_New_UsesResolvedPlatformProfile(t *testing.T) {
 	require.NotNil(t, boot.logger)
 	require.NotEmpty(t, boot.platform.Profile)
 	require.NotEmpty(t, boot.platform.TargetOS)
-	require.NotEmpty(t, boot.platform.Trigger.Source)
+	require.NotEmpty(t, boot.platform.Trigger.Hotkey.Key)
 	require.NotEmpty(t, boot.platform.Audio.Backend)
 	require.NotEmpty(t, boot.platform.Clipboard.TargetOS)
 }
 
-func TestBootstrap_New_UsesMacOSDevResolvers(t *testing.T) {
+func TestBootstrap_New_UsesMacOSResolvers(t *testing.T) {
 	if runtime.GOOS != "darwin" {
-		t.Skip("macos_dev bootstrap wiring only applies on darwin")
+		t.Skip("macos bootstrap wiring only applies on darwin")
 	}
 
-	t.Setenv("STTD_PLATFORM_PROFILE", "macos_dev")
+	t.Setenv("STTD_PLATFORM_PROFILE", "macos")
 	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
 	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
 
@@ -51,7 +60,7 @@ func TestBootstrap_New_UsesMacOSDevResolvers(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "darwin", boot.platform.TargetOS)
-	require.Equal(t, "hotkey", boot.platform.Trigger.Source)
+	require.Equal(t, "space", boot.platform.Trigger.Hotkey.Key)
 	require.Equal(t, "macos_capture", boot.platform.Audio.Backend)
 	require.Equal(t, "pbcopy", boot.platform.Clipboard.PreferredCopy)
 	require.Equal(t, "osascript", boot.platform.Clipboard.PreferredPaste)
@@ -63,10 +72,6 @@ func TestBootstrap_New_UsesSteamDeckResolvers(t *testing.T) {
 	}
 
 	t.Setenv("STTD_PLATFORM_PROFILE", "steam_deck")
-	t.Setenv("STTD_TRIGGER_DEVICE_PATH", "/dev/input/event0")
-	t.Setenv("STTD_TRIGGER_EVENT_TYPE", "1")
-	t.Setenv("STTD_TRIGGER_EVENT_CODE", "1337")
-	t.Setenv("STTD_TRIGGER_ACTIVE_VALUE", "1")
 	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
 	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
 
@@ -74,9 +79,7 @@ func TestBootstrap_New_UsesSteamDeckResolvers(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "linux", boot.platform.TargetOS)
-	require.Equal(t, "steam", boot.platform.Trigger.Source)
-	require.Equal(t, "/dev/input/event0", boot.platform.Trigger.DevicePath)
-	require.Equal(t, uint16(1), boot.platform.Trigger.EventType)
-	require.Equal(t, uint16(1337), boot.platform.Trigger.EventCode)
+	require.Equal(t, "f12", boot.platform.Trigger.Hotkey.Key)
+	require.Equal(t, "toggle", boot.platform.Trigger.Mode)
 	require.Equal(t, "pw-record", boot.platform.Audio.Backend)
 }

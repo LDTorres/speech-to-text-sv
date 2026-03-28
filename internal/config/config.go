@@ -22,16 +22,9 @@ type Config struct {
 type PlatformProfile string
 
 const (
-	PlatformProfileAuto         PlatformProfile = "auto"
-	PlatformProfileMacOSDev     PlatformProfile = "macos_dev"
-	PlatformProfileSteamDeck    PlatformProfile = "steam_deck"
-	PlatformProfileLinuxDesktop PlatformProfile = "linux_desktop"
-)
-
-const (
-	TriggerSourceStub   = "stub"
-	TriggerSourceHotkey = "hotkey"
-	TriggerSourceSteam  = "steam"
+	PlatformProfileMacOS     PlatformProfile = "macos"
+	PlatformProfileSteamDeck PlatformProfile = "steam_deck"
+	PlatformProfileLinux     PlatformProfile = "linux"
 )
 
 const (
@@ -40,9 +33,7 @@ const (
 )
 
 const (
-	AudioBackendFile         = "file"
 	AudioBackendMacOSCapture = "macos_capture"
-	AudioBackendLinuxCapture = "linux_capture"
 	AudioBackendPWRecord     = "pw-record"
 )
 
@@ -52,7 +43,7 @@ const (
 )
 
 type PlatformConfig struct {
-	Profile PlatformProfile `envconfig:"PROFILE" default:"auto"`
+	Profile PlatformProfile `envconfig:"PROFILE" default:"linux"`
 }
 
 type AppConfig struct {
@@ -66,14 +57,9 @@ type HotkeyConfig struct {
 }
 
 type TriggerConfig struct {
-	Source          string        `envconfig:"SOURCE"`
 	Mode            string        `envconfig:"MODE" default:"hold"`
 	DoubleTapWindow time.Duration `envconfig:"DOUBLE_TAP_WINDOW" default:"400ms"`
 	Hotkey          HotkeyConfig
-	DevicePath      string `envconfig:"DEVICE_PATH" default:""`
-	EventType       uint16 `envconfig:"EVENT_TYPE" default:"0"`
-	EventCode       uint16 `envconfig:"EVENT_CODE" default:"0"`
-	ActiveValue     int32  `envconfig:"ACTIVE_VALUE" default:"1"`
 }
 
 type AudioConfig struct {
@@ -107,13 +93,8 @@ type ResolvedPlatform struct {
 }
 
 type ResolvedTrigger struct {
-	Source      string
-	Mode        string
-	Hotkey      ResolvedHotkey
-	DevicePath  string
-	EventType   uint16
-	EventCode   uint16
-	ActiveValue int32
+	Mode   string
+	Hotkey ResolvedHotkey
 }
 
 type ResolvedHotkey struct {
@@ -187,10 +168,6 @@ func (c Config) validate() error {
 		return fmt.Errorf("invalid configuration: unsupported platform profile %q", c.Platform.Profile)
 	}
 
-	if c.Trigger.Source != "" && !isValidTriggerSource(c.Trigger.Source) {
-		return fmt.Errorf("invalid configuration: unsupported trigger source %q", c.Trigger.Source)
-	}
-
 	if !isValidTriggerMode(c.Trigger.Mode) {
 		return fmt.Errorf("invalid configuration: unsupported trigger mode %q", c.Trigger.Mode)
 	}
@@ -226,55 +203,29 @@ func (c Config) ResolvePlatform(goos string) (ResolvedPlatform, error) {
 
 	resolved := defaultsForProfile(profile)
 
-	if c.Trigger.Source != "" {
-		resolved.Trigger.Source = c.Trigger.Source
-	}
 	if c.Trigger.Mode != "" {
 		resolved.Trigger.Mode = c.Trigger.Mode
 	}
 
-	if resolved.Trigger.Source == TriggerSourceHotkey {
-		hotkeyCfg := HotkeyConfig{
-			Modifiers: strings.Join(resolved.Trigger.Hotkey.Modifiers, "+"),
-			Key:       resolved.Trigger.Hotkey.Key,
-		}
-		if c.Trigger.Hotkey.Modifiers != "" {
-			hotkeyCfg.Modifiers = c.Trigger.Hotkey.Modifiers
-		}
-		if c.Trigger.Hotkey.Key != "" {
-			hotkeyCfg.Key = c.Trigger.Hotkey.Key
-		}
-
-		hotkey, err := parseHotkey(hotkeyCfg)
-		if err != nil {
-			return ResolvedPlatform{}, err
-		}
-		resolved.Trigger.Hotkey = hotkey
+	hotkeyCfg := HotkeyConfig{
+		Modifiers: strings.Join(resolved.Trigger.Hotkey.Modifiers, "+"),
+		Key:       resolved.Trigger.Hotkey.Key,
+	}
+	if c.Trigger.Hotkey.Modifiers != "" {
+		hotkeyCfg.Modifiers = c.Trigger.Hotkey.Modifiers
+	}
+	if c.Trigger.Hotkey.Key != "" {
+		hotkeyCfg.Key = c.Trigger.Hotkey.Key
 	}
 
-	if c.Trigger.DevicePath != "" {
-		resolved.Trigger.DevicePath = c.Trigger.DevicePath
+	hotkey, err := parseHotkey(hotkeyCfg)
+	if err != nil {
+		return ResolvedPlatform{}, err
 	}
-	if c.Trigger.EventType != 0 {
-		resolved.Trigger.EventType = c.Trigger.EventType
-	}
-	if c.Trigger.EventCode != 0 {
-		resolved.Trigger.EventCode = c.Trigger.EventCode
-	}
-	if c.Trigger.ActiveValue != 0 {
-		resolved.Trigger.ActiveValue = c.Trigger.ActiveValue
-	}
+	resolved.Trigger.Hotkey = hotkey
 
 	if c.Audio.InputDevice != "" {
 		resolved.Audio.InputDevice = c.Audio.InputDevice
-	}
-
-	if err := validateResolvedTrigger(profile, resolved.Trigger.Source); err != nil {
-		return ResolvedPlatform{}, err
-	}
-
-	if err := validateResolvedSteamDeckTrigger(profile, resolved.Trigger); err != nil {
-		return ResolvedPlatform{}, err
 	}
 
 	return resolved, nil
@@ -286,16 +237,7 @@ func (c Config) MustResolveCurrentPlatform() (ResolvedPlatform, error) {
 
 func isValidProfile(profile PlatformProfile) bool {
 	switch profile {
-	case PlatformProfileAuto, PlatformProfileMacOSDev, PlatformProfileSteamDeck, PlatformProfileLinuxDesktop:
-		return true
-	default:
-		return false
-	}
-}
-
-func isValidTriggerSource(source string) bool {
-	switch source {
-	case TriggerSourceStub, TriggerSourceHotkey, TriggerSourceSteam:
+	case PlatformProfileMacOS, PlatformProfileSteamDeck, PlatformProfileLinux:
 		return true
 	default:
 		return false
@@ -313,21 +255,12 @@ func isValidTriggerMode(mode string) bool {
 
 func resolveProfile(profile PlatformProfile, goos string) (PlatformProfile, error) {
 	switch profile {
-	case PlatformProfileAuto:
-		switch goos {
-		case "darwin":
-			return PlatformProfileMacOSDev, nil
-		case "linux":
-			return PlatformProfileLinuxDesktop, nil
-		default:
-			return "", fmt.Errorf("invalid configuration: platform profile %q is unsupported on os %q", profile, goos)
-		}
-	case PlatformProfileMacOSDev:
+	case PlatformProfileMacOS:
 		if goos != "darwin" {
 			return "", fmt.Errorf("invalid configuration: platform profile %q requires darwin but current os is %q", profile, goos)
 		}
 		return profile, nil
-	case PlatformProfileSteamDeck, PlatformProfileLinuxDesktop:
+	case PlatformProfileSteamDeck, PlatformProfileLinux:
 		if goos != "linux" {
 			return "", fmt.Errorf("invalid configuration: platform profile %q requires linux but current os is %q", profile, goos)
 		}
@@ -339,13 +272,12 @@ func resolveProfile(profile PlatformProfile, goos string) (PlatformProfile, erro
 
 func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 	switch profile {
-	case PlatformProfileMacOSDev:
+	case PlatformProfileMacOS:
 		return ResolvedPlatform{
 			Profile:  profile,
 			TargetOS: "darwin",
 			Trigger: ResolvedTrigger{
-				Source: TriggerSourceHotkey,
-				Mode:   TriggerModeHold,
+				Mode: TriggerModeHold,
 				Hotkey: ResolvedHotkey{
 					Modifiers: []string{"cmd", "shift"},
 					Key:       "space",
@@ -366,10 +298,11 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 			Profile:  profile,
 			TargetOS: "linux",
 			Trigger: ResolvedTrigger{
-				Source:      TriggerSourceSteam,
-				Mode:        TriggerModeHold,
-				EventType:   1,
-				ActiveValue: 1,
+				Mode: TriggerModeToggle,
+				Hotkey: ResolvedHotkey{
+					Modifiers: []string{},
+					Key:       "f12",
+				},
 			},
 			Audio: ResolvedAudio{
 				Backend:     AudioBackendPWRecord,
@@ -383,14 +316,17 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 		}
 	default:
 		return ResolvedPlatform{
-			Profile:  PlatformProfileLinuxDesktop,
+			Profile:  PlatformProfileLinux,
 			TargetOS: "linux",
 			Trigger: ResolvedTrigger{
-				Source: TriggerSourceStub,
-				Mode:   TriggerModeHold,
+				Mode: TriggerModeHold,
+				Hotkey: ResolvedHotkey{
+					Modifiers: []string{"ctrl", "shift"},
+					Key:       "space",
+				},
 			},
 			Audio: ResolvedAudio{
-				Backend:     AudioBackendFile,
+				Backend:     AudioBackendPWRecord,
 				InputDevice: "",
 			},
 			Clipboard: ResolvedClipboard{
@@ -400,45 +336,6 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 			},
 		}
 	}
-}
-
-func validateResolvedTrigger(profile PlatformProfile, source string) error {
-	switch profile {
-	case PlatformProfileMacOSDev:
-		if source == TriggerSourceHotkey || source == TriggerSourceStub {
-			return nil
-		}
-	case PlatformProfileSteamDeck:
-		if source == TriggerSourceSteam || source == TriggerSourceHotkey || source == TriggerSourceStub {
-			return nil
-		}
-	case PlatformProfileLinuxDesktop:
-		if source == TriggerSourceHotkey || source == TriggerSourceStub {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("invalid configuration: trigger source %q is not supported for platform profile %q", source, profile)
-}
-
-func validateResolvedSteamDeckTrigger(profile PlatformProfile, triggerConfig ResolvedTrigger) error {
-	if profile != PlatformProfileSteamDeck || triggerConfig.Source != TriggerSourceSteam {
-		return nil
-	}
-
-	if triggerConfig.DevicePath == "" {
-		return fmt.Errorf("invalid configuration: steam deck trigger device path is required")
-	}
-
-	if triggerConfig.EventType == 0 {
-		return fmt.Errorf("invalid configuration: steam deck trigger event type must be greater than zero")
-	}
-
-	if triggerConfig.EventCode == 0 {
-		return fmt.Errorf("invalid configuration: steam deck trigger event code must be greater than zero")
-	}
-
-	return nil
 }
 
 func parseHotkey(cfg HotkeyConfig) (ResolvedHotkey, error) {

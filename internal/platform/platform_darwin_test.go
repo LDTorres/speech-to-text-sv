@@ -12,9 +12,9 @@ import (
 
 func TestPlatform_NewTriggerWatcher_UsesMacHotkey(t *testing.T) {
 	source := newTriggerSource(config.ResolvedPlatform{
-		Profile: config.PlatformProfileMacOSDev,
+		Profile: config.PlatformProfileMacOS,
 		Trigger: config.ResolvedTrigger{
-			Source: config.TriggerSourceHotkey,
+			Mode: config.TriggerModeHold,
 			Hotkey: config.ResolvedHotkey{
 				Modifiers: []string{"cmd", "shift"},
 				Key:       "space",
@@ -32,7 +32,7 @@ func TestPlatform_NewRecorder_UsesMacCapture(t *testing.T) {
 		FileName:     "recording.wav",
 		SampleFormat: "wav",
 	}, config.ResolvedPlatform{
-		Profile: config.PlatformProfileMacOSDev,
+		Profile: config.PlatformProfileMacOS,
 		Audio: config.ResolvedAudio{
 			Backend: config.AudioBackendMacOSCapture,
 		},

@@ -10,11 +10,7 @@ import (
 )
 
 func newTriggerSource(resolved config.ResolvedPlatform) trigger.Source {
-	if resolved.Trigger.Source == config.TriggerSourceHotkey {
-		return darwinplatform.NewHotkeySource(resolved.Trigger.Hotkey)
-	}
-
-	return trigger.NewStubSource()
+	return darwinplatform.NewHotkeySource(resolved.Trigger.Hotkey)
 }
 
 func newRecorder(cfg config.AudioConfig, resolved config.ResolvedPlatform) audio.Recorder {

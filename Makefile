@@ -1,6 +1,8 @@
 GO ?= go
+PROFILE ?=
+MODEL ?=
 
-.PHONY: run test setup-whisper build-whisper-cli build-release detect-steamdeck-trigger
+.PHONY: run test dev-setup change-model build-whisper-cli build-release
 
 run:
 	$(GO) run ./cmd/sttd
@@ -8,14 +10,14 @@ run:
 test:
 	GOCACHE=$${GOCACHE:-/tmp/gocache} $(GO) test ./...
 
-setup-whisper:
-	./scripts/install-whisper.sh
+dev-setup:
+	./scripts/dev-setup.sh $(if $(PROFILE),--profile $(PROFILE),) $(if $(MODEL),--model $(MODEL),)
+
+change-model:
+	./scripts/change-model.sh $(if $(MODEL),--model $(MODEL),)
 
 build-whisper-cli:
 	./scripts/build-whisper-cli-container.sh
 
 build-release:
 	./scripts/build-release.sh
-
-detect-steamdeck-trigger:
-	./scripts/detect-steamdeck-trigger.sh

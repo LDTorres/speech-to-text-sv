@@ -10,20 +10,7 @@ import (
 )
 
 func newTriggerSource(resolved config.ResolvedPlatform) trigger.Source {
-	if resolved.Trigger.Source == config.TriggerSourceHotkey {
-		return linuxplatform.NewHotkeySource(resolved.Trigger.Hotkey)
-	}
-
-	if resolved.Profile == config.PlatformProfileSteamDeck && resolved.Trigger.Source == config.TriggerSourceSteam {
-		return linuxplatform.NewEvdevSource(
-			resolved.Trigger.DevicePath,
-			resolved.Trigger.EventType,
-			resolved.Trigger.EventCode,
-			resolved.Trigger.ActiveValue,
-		)
-	}
-
-	return trigger.NewStubSource()
+	return linuxplatform.NewHotkeySource(resolved.Trigger.Hotkey)
 }
 
 func newRecorder(cfg config.AudioConfig, resolved config.ResolvedPlatform) audio.Recorder {

@@ -10,7 +10,7 @@ import (
 
 func NewTriggerWatcher(logger *zap.Logger, triggerCfg config.TriggerConfig, resolved config.ResolvedPlatform) trigger.Watcher {
 	source := newTriggerSource(resolved)
-	return trigger.NewWatcher(logger, source, resolved.Trigger.Source, resolved.Trigger.Mode, triggerCfg.DoubleTapWindow)
+	return trigger.NewWatcher(logger, source, "hotkey", resolved.Trigger.Mode, triggerCfg.DoubleTapWindow)
 }
 
 func NewRecorder(cfg config.AudioConfig, resolved config.ResolvedPlatform) audio.Recorder {

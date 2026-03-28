@@ -33,4 +33,4 @@ dist/
 # .idea/
 # .vscode/
 
-.ds_store
+.DS_Store

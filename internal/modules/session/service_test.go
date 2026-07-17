@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -240,6 +241,44 @@ func TestSessionService_RetryLastPaste_NoTranscript_ReturnsError(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoTranscript)
 }
 
+func TestSessionService_StartRecording_DuringProcessing_ReturnsBusy(t *testing.T) {
+	t.Parallel()
+
+	recorder := &fakeRecorder{
+		stopRecording: audio.Recording{Path: "/tmp/sttd/last-recording.wav"},
+	}
+	transcriber := &blockingTranscriber{
+		transcript: transcribe.Transcript{Text: "processing"},
+		blocked:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	service := NewService(zap.NewNop(), recorder, transcriber, &fakeClipboard{}, notify.NewNoop())
+
+	require.NoError(t, service.StartRecording(context.Background()))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- service.StopRecordingAndProcess(context.Background())
+	}()
+
+	select {
+	case <-transcriber.blocked:
+	case <-time.After(time.Second):
+		t.Fatal("transcriber did not block")
+	}
+
+	require.ErrorIs(t, service.StartRecording(context.Background()), ErrBusy)
+
+	close(transcriber.release)
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stop processing did not complete")
+	}
+}
+
 type fakeRecorder struct {
 	startErr      error
 	stopErr       error
@@ -262,6 +301,26 @@ type fakeTranscriber struct {
 	transcript transcribe.Transcript
 	err        error
 	calls      int
+}
+
+type blockingTranscriber struct {
+	transcript transcribe.Transcript
+	blocked    chan struct{}
+	release    chan struct{}
+	once       sync.Once
+}
+
+func (t *blockingTranscriber) TranscribeFile(ctx context.Context, path string) (transcribe.Transcript, error) {
+	t.once.Do(func() {
+		close(t.blocked)
+	})
+
+	select {
+	case <-t.release:
+		return t.transcript, nil
+	case <-ctx.Done():
+		return transcribe.Transcript{}, ctx.Err()
+	}
 }
 
 func (t *fakeTranscriber) TranscribeFile(ctx context.Context, path string) (transcribe.Transcript, error) {

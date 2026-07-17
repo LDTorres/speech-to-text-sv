@@ -3,10 +3,13 @@ PROFILE ?=
 MODEL ?=
 LANGUAGE ?=
 
-.PHONY: run test dev-setup change-model build-whisper-cli build-release
+.PHONY: run ctl test dev-setup change-model build-whisper-cli build-release publish-release
 
 run:
 	$(GO) run ./cmd/sttd
+
+ctl:
+	$(GO) run ./cmd/sttdctl
 
 test:
 	GOCACHE=$${GOCACHE:-/tmp/gocache} $(GO) test ./...
@@ -22,3 +25,6 @@ build-whisper-cli:
 
 build-release:
 	./scripts/build-release.sh
+
+publish-release:
+	./scripts/publish-release.sh

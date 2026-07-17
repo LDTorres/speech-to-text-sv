@@ -15,22 +15,40 @@ import (
 	"go.uber.org/zap"
 )
 
+type State string
+
+const (
+	StateIdle       State = "idle"
+	StateRecording  State = "recording"
+	StateProcessing State = "processing"
+)
+
 var (
 	ErrAlreadyRecording    = errors.New("session already recording")
 	ErrNotRecording        = errors.New("session is not recording")
 	ErrNoTranscript        = errors.New("no transcript available")
 	ErrTranscriptionFailed = errors.New("session transcription failed")
 	ErrPasteFailed         = errors.New("session paste failed")
+	ErrBusy                = errors.New("session is processing")
+	ErrInvalidState        = errors.New("session is in an invalid state")
 )
 
+type Status struct {
+	State          State
+	RetryAvailable bool
+	LastTranscript string
+}
+
 type Service interface {
-	HandleTriggerPressed(ctx context.Context) error
-	HandleTriggerReleased(ctx context.Context) error
+	StartRecording(ctx context.Context) error
+	StopRecordingAndProcess(ctx context.Context) error
+	ToggleRecording(ctx context.Context) error
 	RetryLastPaste(ctx context.Context) error
+	Status(ctx context.Context) Status
 }
 
 type state struct {
-	recordingActive  bool
+	current          State
 	lastTranscript   string
 	lastTranscriptAt time.Time
 	retryEligible    bool
@@ -60,18 +78,21 @@ func NewService(
 		transcriber: transcriber,
 		clipboard:   clipboard,
 		notifier:    notifier,
+		state: state{
+			current: StateIdle,
+		},
 	}
 }
 
-func (s *SessionService) HandleTriggerPressed(ctx context.Context) error {
-	s.logger.Info("trigger pressed")
+func (s *SessionService) StartRecording(ctx context.Context) error {
+	s.logger.Info("recording start requested")
 
-	if err := s.reserveRecording(); err != nil {
+	if err := s.transitionToRecording(); err != nil {
 		return err
 	}
 
 	if err := s.recorder.Start(ctx); err != nil {
-		s.releaseRecording()
+		s.setState(StateIdle)
 		return fmt.Errorf("start recording: %w", err)
 	}
 
@@ -81,12 +102,13 @@ func (s *SessionService) HandleTriggerPressed(ctx context.Context) error {
 	return nil
 }
 
-func (s *SessionService) HandleTriggerReleased(ctx context.Context) error {
-	s.logger.Info("trigger released")
+func (s *SessionService) StopRecordingAndProcess(ctx context.Context) error {
+	s.logger.Info("recording stop requested")
 
-	if err := s.finishRecording(); err != nil {
+	if err := s.transitionToProcessing(); err != nil {
 		return err
 	}
+	defer s.setState(StateIdle)
 
 	recording, err := s.recorder.Stop(ctx)
 	if err != nil {
@@ -133,7 +155,28 @@ func (s *SessionService) HandleTriggerReleased(ctx context.Context) error {
 	return nil
 }
 
+func (s *SessionService) ToggleRecording(ctx context.Context) error {
+	switch s.Status(ctx).State {
+	case StateIdle:
+		return s.StartRecording(ctx)
+	case StateRecording:
+		return s.StopRecordingAndProcess(ctx)
+	case StateProcessing:
+		return ErrBusy
+	default:
+		return ErrInvalidState
+	}
+}
+
 func (s *SessionService) RetryLastPaste(ctx context.Context) error {
+	status := s.Status(ctx)
+	if status.State == StateProcessing {
+		return ErrBusy
+	}
+	if status.State != StateIdle {
+		return ErrInvalidState
+	}
+
 	transcript, ok := s.lastTranscript()
 	if !ok {
 		return ErrNoTranscript
@@ -153,36 +196,76 @@ func (s *SessionService) RetryLastPaste(ctx context.Context) error {
 	return nil
 }
 
-func (s *SessionService) reserveRecording() error {
+func (s *SessionService) Status(ctx context.Context) Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.state.recordingActive {
+	return Status{
+		State:          s.state.current,
+		RetryAvailable: s.state.retryEligible && s.state.lastTranscript != "",
+		LastTranscript: s.state.lastTranscript,
+	}
+}
+
+func (s *SessionService) HandleTriggerPressed(ctx context.Context) error {
+	return s.StartRecording(ctx)
+}
+
+func (s *SessionService) HandleTriggerReleased(ctx context.Context) error {
+	return s.StopRecordingAndProcess(ctx)
+}
+
+func (s *SessionService) transitionToRecording() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch s.state.current {
+	case StateIdle:
+		s.transitionLocked(StateRecording)
+		return nil
+	case StateRecording:
 		return ErrAlreadyRecording
+	case StateProcessing:
+		return ErrBusy
+	default:
+		return ErrInvalidState
 	}
-
-	s.state.recordingActive = true
-
-	return nil
 }
 
-func (s *SessionService) finishRecording() error {
+func (s *SessionService) transitionToProcessing() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.state.recordingActive {
+	switch s.state.current {
+	case StateRecording:
+		s.transitionLocked(StateProcessing)
+		return nil
+	case StateIdle:
 		return ErrNotRecording
+	case StateProcessing:
+		return ErrBusy
+	default:
+		return ErrInvalidState
 	}
-
-	s.state.recordingActive = false
-
-	return nil
 }
 
-func (s *SessionService) releaseRecording() {
+func (s *SessionService) setState(next State) {
 	s.mu.Lock()
-	s.state.recordingActive = false
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	s.transitionLocked(next)
+}
+
+func (s *SessionService) transitionLocked(next State) {
+	if s.state.current == next {
+		return
+	}
+
+	s.logger.Info(
+		"session state changed",
+		zap.String("from", string(s.state.current)),
+		zap.String("to", string(next)),
+	)
+	s.state.current = next
 }
 
 func (s *SessionService) clearTranscript() {

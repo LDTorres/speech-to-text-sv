@@ -149,9 +149,33 @@ This produces:
 - `dist/release/sttd-<version>-linux-amd64/`
 - `dist/release/sttd-<version>-linux-amd64.tar.gz`
 
+Publish the release to GitHub Releases:
+
+```bash
+make publish-release
+```
+
+Useful variants:
+
+```bash
+make publish-release RELEASE_VERSION=v0.1.0
+./scripts/publish-release.sh --tag v0.1.0 --title "v0.1.0"
+./scripts/publish-release.sh --tag v0.1.0 --notes-file ./release-notes.md
+./scripts/publish-release.sh --tag v0.1.0 --draft
+```
+
+`publish-release.sh`:
+
+- uses `gh release`
+- uploads `dist/release/sttd-<version>-linux-amd64.tar.gz`
+- creates the release if it does not exist
+- updates the release and re-uploads the asset with `--clobber` if it already exists
+- runs `build-release` automatically if the archive is missing, unless `--skip-build` is used
+
 Release layout:
 
 - `sttd`
+- `sttdctl`
 - `install.sh`
 - `change-model.sh`
 - `uninstall.sh`
@@ -205,6 +229,19 @@ Uninstall:
 - does not remove `.env`
 
 If you want to remove everything else, delete the release directory manually.
+
+### Logs
+
+If installed as `speech-to-text.service`, the daemon writes stdout and stderr to:
+
+- `~/.local/state/sttd/sttd.log`
+
+You can inspect logs through `sttdctl`:
+
+```bash
+./sttdctl logs path --json
+./sttdctl logs tail --json --lines 200
+```
 
 ## Configuration
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LDTorres/speech-to-text-sv/internal/modules/session"
 	"github.com/LDTorres/speech-to-text-sv/internal/modules/trigger"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -40,7 +41,7 @@ func TestDaemon_Run_StopsOnContextCancel(t *testing.T) {
 
 	watcher := newFakeWatcher()
 	session := newFakeSessionService()
-	daemon := New(zap.NewNop(), watcher, session, time.Second)
+	daemon := New(zap.NewNop(), watcher, nil, session, time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -75,7 +76,7 @@ func testRunDispatchesEvent(
 
 	watcher := newFakeWatcher()
 	session := newFakeSessionService()
-	daemon := New(zap.NewNop(), watcher, session, time.Second)
+	daemon := New(zap.NewNop(), watcher, nil, session, time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -184,7 +185,7 @@ func newFakeSessionService() *fakeSessionService {
 	}
 }
 
-func (s *fakeSessionService) HandleTriggerPressed(ctx context.Context) error {
+func (s *fakeSessionService) StartRecording(ctx context.Context) error {
 	s.mu.Lock()
 	s.pressCalls++
 	s.mu.Unlock()
@@ -192,7 +193,7 @@ func (s *fakeSessionService) HandleTriggerPressed(ctx context.Context) error {
 	return nil
 }
 
-func (s *fakeSessionService) HandleTriggerReleased(ctx context.Context) error {
+func (s *fakeSessionService) StopRecordingAndProcess(ctx context.Context) error {
 	s.mu.Lock()
 	s.releaseCalls++
 	s.mu.Unlock()
@@ -206,6 +207,20 @@ func (s *fakeSessionService) RetryLastPaste(ctx context.Context) error {
 	s.mu.Unlock()
 	s.called <- struct{}{}
 	return nil
+}
+
+func (s *fakeSessionService) ToggleRecording(ctx context.Context) error {
+	return s.StartRecording(ctx)
+}
+
+func (s *fakeSessionService) Status(ctx context.Context) session.Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return session.Status{
+		State:          session.StateIdle,
+		RetryAvailable: s.retryCalls > 0,
+	}
 }
 
 func (s *fakeSessionService) totalCalls() int {

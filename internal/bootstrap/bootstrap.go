@@ -10,6 +10,7 @@ import (
 	"github.com/LDTorres/speech-to-text-sv/internal/app"
 	"github.com/LDTorres/speech-to-text-sv/internal/config"
 	"github.com/LDTorres/speech-to-text-sv/internal/log"
+	"github.com/LDTorres/speech-to-text-sv/internal/modules/control"
 	"github.com/LDTorres/speech-to-text-sv/internal/modules/notify"
 	"github.com/LDTorres/speech-to-text-sv/internal/modules/session"
 	"github.com/LDTorres/speech-to-text-sv/internal/modules/transcribe"
@@ -62,7 +63,19 @@ func New(ctx context.Context) (*Bootstrap, error) {
 	var notifier notify.Notifier = notify.NewNoop()
 
 	sessionService := session.NewService(logger, recorder, transcriber, clipboard, notifier)
-	daemon := app.New(logger, triggerWatcher, sessionService, cfg.App.ShutdownTimeout)
+	var controlServer *control.Server
+	if resolvedPlatform.ExternalControl.Enabled {
+		controlServer, err = control.NewServer(
+			logger,
+			resolvedPlatform.ExternalControl.SocketPath,
+			sessionService,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("create external control server: %w", err)
+		}
+	}
+
+	daemon := app.New(logger, triggerWatcher, controlServer, sessionService, cfg.App.ShutdownTimeout)
 
 	return &Bootstrap{
 		daemon:   daemon,

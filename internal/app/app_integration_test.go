@@ -28,7 +28,7 @@ func TestDaemon_Run_PressThenRelease_CompletesSessionFlow(t *testing.T) {
 		transcript: transcribe.Transcript{Text: "hello end to end", Duration: time.Second},
 	}
 	service := session.NewService(zap.NewNop(), recorder, transcriber, clipboard, notify.NewNoop())
-	daemon := New(zap.NewNop(), watcher, service, time.Second)
+	daemon := New(zap.NewNop(), watcher, nil, service, time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -75,7 +75,7 @@ func TestDaemon_Run_DoubleTap_RetriesPaste(t *testing.T) {
 		transcript: transcribe.Transcript{Text: "retry end to end", Duration: time.Second},
 	}
 	service := session.NewService(zap.NewNop(), recorder, transcriber, clipboard, notify.NewNoop())
-	daemon := New(zap.NewNop(), watcher, service, time.Second)
+	daemon := New(zap.NewNop(), watcher, nil, service, time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

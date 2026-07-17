@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -10,13 +11,14 @@ import (
 )
 
 type Config struct {
-	Platform   PlatformConfig
-	App        AppConfig
-	Trigger    TriggerConfig
-	Audio      AudioConfig
-	Transcribe TranscribeConfig
-	Clipboard  ClipboardConfig
-	Notify     NotifyConfig
+	Platform        PlatformConfig
+	App             AppConfig
+	Trigger         TriggerConfig
+	ExternalControl ExternalControlConfig
+	Audio           AudioConfig
+	Transcribe      TranscribeConfig
+	Clipboard       ClipboardConfig
+	Notify          NotifyConfig
 }
 
 type PlatformProfile string
@@ -62,6 +64,13 @@ type TriggerConfig struct {
 	Hotkey          HotkeyConfig
 }
 
+type ExternalControlConfig struct {
+	Enabled    bool   `envconfig:"ENABLED"`
+	SocketPath string `envconfig:"SOCKET_PATH" default:""`
+
+	enabledSet bool
+}
+
 type AudioConfig struct {
 	TempDir      string `envconfig:"TEMP_DIR" default:"/tmp/sttd"`
 	FileName     string `envconfig:"FILE_NAME" default:"last-recording.wav"`
@@ -85,16 +94,22 @@ type NotifyConfig struct {
 }
 
 type ResolvedPlatform struct {
-	Profile   PlatformProfile
-	TargetOS  string
-	Trigger   ResolvedTrigger
-	Audio     ResolvedAudio
-	Clipboard ResolvedClipboard
+	Profile         PlatformProfile
+	TargetOS        string
+	Trigger         ResolvedTrigger
+	ExternalControl ResolvedExternalControl
+	Audio           ResolvedAudio
+	Clipboard       ResolvedClipboard
 }
 
 type ResolvedTrigger struct {
 	Mode   string
 	Hotkey ResolvedHotkey
+}
+
+type ResolvedExternalControl struct {
+	Enabled    bool
+	SocketPath string
 }
 
 type ResolvedHotkey struct {
@@ -134,6 +149,11 @@ func Load() (Config, error) {
 
 	if err := envconfig.Process("STTD_TRIGGER_HOTKEY", &cfg.Trigger.Hotkey); err != nil {
 		return Config{}, fmt.Errorf("load trigger hotkey config: %w", err)
+	}
+
+	cfg.ExternalControl.enabledSet = hasEnvKey("STTD_EXTERNAL_CONTROL_ENABLED")
+	if err := envconfig.Process("STTD_EXTERNAL_CONTROL", &cfg.ExternalControl); err != nil {
+		return Config{}, fmt.Errorf("load external control config: %w", err)
 	}
 
 	if err := envconfig.Process("STTD_AUDIO", &cfg.Audio); err != nil {
@@ -178,6 +198,10 @@ func (c Config) validate() error {
 
 	if c.Trigger.DoubleTapWindow <= 0 {
 		return fmt.Errorf("invalid configuration: double tap window must be greater than zero")
+	}
+
+	if c.ExternalControl.SocketPath != "" && strings.TrimSpace(c.ExternalControl.SocketPath) == "" {
+		return fmt.Errorf("invalid configuration: external control socket path must not be blank")
 	}
 
 	if c.Audio.TempDir == "" {
@@ -226,6 +250,13 @@ func (c Config) ResolvePlatform(goos string) (ResolvedPlatform, error) {
 
 	if c.Audio.InputDevice != "" {
 		resolved.Audio.InputDevice = c.Audio.InputDevice
+	}
+
+	if c.ExternalControl.enabledSet {
+		resolved.ExternalControl.Enabled = c.ExternalControl.Enabled
+	}
+	if c.ExternalControl.SocketPath != "" {
+		resolved.ExternalControl.SocketPath = strings.TrimSpace(c.ExternalControl.SocketPath)
 	}
 
 	return resolved, nil
@@ -283,6 +314,9 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 					Key:       "space",
 				},
 			},
+			ExternalControl: ResolvedExternalControl{
+				Enabled: false,
+			},
 			Audio: ResolvedAudio{
 				Backend:     AudioBackendMacOSCapture,
 				InputDevice: "",
@@ -304,6 +338,9 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 					Key:       "f12",
 				},
 			},
+			ExternalControl: ResolvedExternalControl{
+				Enabled: true,
+			},
 			Audio: ResolvedAudio{
 				Backend:     AudioBackendPWRecord,
 				InputDevice: "",
@@ -324,6 +361,9 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 					Modifiers: []string{"ctrl", "shift"},
 					Key:       "space",
 				},
+			},
+			ExternalControl: ResolvedExternalControl{
+				Enabled: false,
 			},
 			Audio: ResolvedAudio{
 				Backend:     AudioBackendPWRecord,
@@ -412,4 +452,9 @@ func normalizeHotkeyKey(value string) (string, error) {
 	}
 
 	return "", fmt.Errorf("invalid configuration: unsupported trigger hotkey key %q", key)
+}
+
+func hasEnvKey(key string) bool {
+	_, ok := os.LookupEnv(key)
+	return ok
 }

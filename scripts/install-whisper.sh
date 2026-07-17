@@ -22,6 +22,7 @@ SERVICE_NAME="speech-to-text.service"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 SYSTEMD_UNIT_PATH="${SYSTEMD_USER_DIR}/${SERVICE_NAME}"
 SERVICE_TEMPLATE_PATH="${ROOT_DIR}/scripts/speech-to-text.service.template"
+LOG_DIR="${HOME}/.local/state/sttd"
 AS_SERVICE=false
 MODEL_NAME="${STTD_DEFAULT_MODEL}"
 LANGUAGE_NAME="${STTD_TRANSCRIBE_LANGUAGE:-es}"
@@ -140,6 +141,7 @@ install_user_service() {
   need_cmd systemctl
 
   mkdir -p "${SYSTEMD_USER_DIR}"
+  mkdir -p "${LOG_DIR}"
 
   sed \
     -e "s|__WORKING_DIRECTORY__|${ROOT_DIR}|g" \

@@ -49,6 +49,12 @@ build_go_binary() {
     TARGET_PLATFORM="${TARGET_PLATFORM}" TARGET_ARCH="${TARGET_ARCH}" OUTPUT_DIR="${RELEASE_DIR}" \
       "${ROOT_DIR}/scripts/build-go-linux-container.sh"
     chmod +x "${RELEASE_DIR}/sttd"
+    (
+      cd "${ROOT_DIR}"
+      CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" \
+        go build -o "${RELEASE_DIR}/sttdctl" ./cmd/sttdctl
+    )
+    chmod +x "${RELEASE_DIR}/sttdctl"
     return
   fi
 
@@ -56,6 +62,8 @@ build_go_binary() {
     cd "${ROOT_DIR}"
     CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" \
       go build -o "${RELEASE_DIR}/sttd" ./cmd/sttd
+    CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" \
+      go build -o "${RELEASE_DIR}/sttdctl" ./cmd/sttdctl
   )
 }
 
@@ -121,12 +129,17 @@ main() {
   need_cmd go
   need_cmd tar
 
+  printf 'preparing release workspace: %s\n' "${RELEASE_DIR}"
   rm -rf "${RELEASE_DIR}"
   mkdir -p "${RELEASE_DIR}" "${RUNTIME_BIN_DIR}"
 
+  printf 'building go binaries...\n'
   build_go_binary
+  printf 'building whisper runtime...\n'
   stage_whisper_runtime
+  printf 'staging release files...\n'
   stage_release_files
+  printf 'packaging release archive...\n'
   package_release
 
   printf 'release directory: %s\n' "${RELEASE_DIR}"

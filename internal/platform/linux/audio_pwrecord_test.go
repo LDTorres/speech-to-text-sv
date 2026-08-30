@@ -51,6 +51,7 @@ func TestPWRecordRecorder_Stop_AfterStart_ReturnsRecording(t *testing.T) {
 	}
 
 	require.NoError(t, recorder.Start(context.Background()))
+	require.NoError(t, os.WriteFile(filepath.Join(recorder.tempDir, recorder.fileName), usableWAV(), 0o644))
 
 	recording, err := recorder.Stop(context.Background())
 
@@ -103,12 +104,40 @@ func TestPWRecordRecorder_Stop_AllowsUsableRecordingWhenProcessExitsNonZero(t *t
 	}
 
 	require.NoError(t, recorder.Start(context.Background()))
-	require.NoError(t, os.WriteFile(filepath.Join(recorder.tempDir, recorder.fileName), []byte("wav"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(recorder.tempDir, recorder.fileName), usableWAV(), 0o644))
 
 	recording, err := recorder.Stop(context.Background())
 
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(recorder.tempDir, recorder.fileName), recording.Path)
+}
+
+func TestRecordingLooksUsable_RejectsHeaderOnlyWAV(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.wav")
+	require.NoError(t, os.WriteFile(path, []byte{
+		'R', 'I', 'F', 'F', 36, 0, 0, 0, 'W', 'A', 'V', 'E',
+		'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
+		0x80, 0x3e, 0, 0, 0, 0x7d, 0, 0, 2, 0, 16, 0,
+		'd', 'a', 't', 'a', 0, 0, 0, 0,
+	}, 0o644))
+
+	require.False(t, recordingLooksUsable(path))
+}
+
+func TestRecordingLooksUsable_AcceptsAudioFrames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audio.wav")
+	require.NoError(t, os.WriteFile(path, usableWAV(), 0o644))
+
+	require.True(t, recordingLooksUsable(path))
+}
+
+func usableWAV() []byte {
+	return []byte{
+		'R', 'I', 'F', 'F', 40, 0, 0, 0, 'W', 'A', 'V', 'E',
+		'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
+		0x80, 0x3e, 0, 0, 0, 0x7d, 0, 0, 2, 0, 16, 0,
+		'd', 'a', 't', 'a', 2, 0, 0, 0, 0, 0,
+	}
 }
 
 func TestPWRecordRecorder_Stop_UsesTimeout(t *testing.T) {

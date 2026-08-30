@@ -26,6 +26,10 @@ WHISPER_SOURCE_DIR="${RUNTIME_SRC_DIR}/whisper.cpp-${WHISPER_CPP_VERSION}"
 WHISPER_BUILD_DIR="${WHISPER_SOURCE_DIR}/build"
 WHISPER_SOURCE_URL="https://github.com/ggml-org/whisper.cpp/archive/refs/tags/${WHISPER_CPP_VERSION}.tar.gz"
 
+print_step() {
+  printf '\n==> [%s/%s] %s\n' "$1" "$2" "$3"
+}
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     printf 'missing required command: %s\n' "$1" >&2
@@ -265,10 +269,15 @@ download_model() {
 
 main() {
   parse_args "$@"
+
+  print_step 1 5 "validating the ${PROFILE_NAME} development profile"
   validate_profile
+
+  print_step 2 5 "preparing local runtime directories and configuration"
   prepare_runtime_dirs
   ensure_env_file
 
+  print_step 3 5 "building the local whisper runtime"
   case "${PROFILE_NAME}" in
     macos)
       build_macos_runtime
@@ -278,9 +287,13 @@ main() {
       ;;
   esac
 
+  print_step 4 5 "ensuring the ${MODEL_NAME} model is available"
   download_model
+
+  print_step 5 5 "writing the local configuration"
   configure_env_file
 
+  printf '\ndevelopment setup completed successfully\n'
   printf '\nprofile selected: %s\n' "${PROFILE_NAME}"
   printf 'whisper-cli available at: %s\n' "${WHISPER_BINARY_PATH}"
   printf 'selected model: %s\n' "${MODEL_NAME}"

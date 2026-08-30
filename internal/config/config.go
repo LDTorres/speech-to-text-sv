@@ -29,6 +29,13 @@ const (
 	PlatformProfileLinux     PlatformProfile = "linux"
 )
 
+type PlatformIntegration string
+
+const (
+	PlatformIntegrationNone     PlatformIntegration = ""
+	PlatformIntegrationHyprland PlatformIntegration = "hyprland"
+)
+
 const (
 	TriggerModeHold   = "hold"
 	TriggerModeToggle = "toggle"
@@ -45,7 +52,8 @@ const (
 )
 
 type PlatformConfig struct {
-	Profile PlatformProfile `envconfig:"PROFILE" default:"linux"`
+	Profile     PlatformProfile     `envconfig:"PROFILE" default:"linux"`
+	Integration PlatformIntegration `envconfig:"INTEGRATION" default:""`
 }
 
 type AppConfig struct {
@@ -54,12 +62,12 @@ type AppConfig struct {
 }
 
 type HotkeyConfig struct {
-	Modifiers string `envconfig:"MODIFIERS" default:"cmd+shift"`
-	Key       string `envconfig:"KEY" default:"space"`
+	Modifiers string `envconfig:"MODIFIERS"`
+	Key       string `envconfig:"KEY"`
 }
 
 type TriggerConfig struct {
-	Mode            string        `envconfig:"MODE" default:"hold"`
+	Mode            string        `envconfig:"MODE"`
 	DoubleTapWindow time.Duration `envconfig:"DOUBLE_TAP_WINDOW" default:"400ms"`
 	Hotkey          HotkeyConfig
 }
@@ -86,7 +94,8 @@ type TranscribeConfig struct {
 }
 
 type ClipboardConfig struct {
-	EnablePaste bool `envconfig:"ENABLE_PASTE" default:"true"`
+	EnablePaste bool          `envconfig:"ENABLE_PASTE" default:"true"`
+	Timeout     time.Duration `envconfig:"TIMEOUT" default:"5s"`
 }
 
 type NotifyConfig struct {
@@ -95,6 +104,7 @@ type NotifyConfig struct {
 
 type ResolvedPlatform struct {
 	Profile         PlatformProfile
+	Integration     PlatformIntegration
 	TargetOS        string
 	Trigger         ResolvedTrigger
 	ExternalControl ResolvedExternalControl
@@ -188,12 +198,22 @@ func (c Config) validate() error {
 		return fmt.Errorf("invalid configuration: unsupported platform profile %q", c.Platform.Profile)
 	}
 
-	if !isValidTriggerMode(c.Trigger.Mode) {
+	if !isValidIntegration(c.Platform.Integration) {
+		return fmt.Errorf("invalid configuration: unsupported platform integration %q", c.Platform.Integration)
+	}
+
+	if c.Platform.Integration == PlatformIntegrationHyprland && c.Platform.Profile == PlatformProfileMacOS {
+		return fmt.Errorf("invalid configuration: hyprland integration requires a linux profile")
+	}
+
+	if c.Trigger.Mode != "" && !isValidTriggerMode(c.Trigger.Mode) {
 		return fmt.Errorf("invalid configuration: unsupported trigger mode %q", c.Trigger.Mode)
 	}
 
-	if _, err := parseHotkey(c.Trigger.Hotkey); err != nil {
-		return err
+	if c.Trigger.Hotkey.Modifiers != "" || c.Trigger.Hotkey.Key != "" {
+		if _, err := parseHotkey(c.Trigger.Hotkey); err != nil {
+			return err
+		}
 	}
 
 	if c.Trigger.DoubleTapWindow <= 0 {
@@ -216,6 +236,10 @@ func (c Config) validate() error {
 		return fmt.Errorf("invalid configuration: transcribe timeout must be greater than zero")
 	}
 
+	if c.Clipboard.Timeout <= 0 {
+		return fmt.Errorf("invalid configuration: clipboard timeout must be greater than zero")
+	}
+
 	return nil
 }
 
@@ -226,6 +250,12 @@ func (c Config) ResolvePlatform(goos string) (ResolvedPlatform, error) {
 	}
 
 	resolved := defaultsForProfile(profile)
+	if c.Platform.Integration != PlatformIntegrationNone {
+		resolved.Integration = c.Platform.Integration
+	}
+	if resolved.Integration == PlatformIntegrationHyprland {
+		resolved.ExternalControl.Enabled = true
+	}
 
 	if c.Trigger.Mode != "" {
 		resolved.Trigger.Mode = c.Trigger.Mode
@@ -275,6 +305,15 @@ func isValidProfile(profile PlatformProfile) bool {
 	}
 }
 
+func isValidIntegration(integration PlatformIntegration) bool {
+	switch integration {
+	case PlatformIntegrationNone, PlatformIntegrationHyprland:
+		return true
+	default:
+		return false
+	}
+}
+
 func isValidTriggerMode(mode string) bool {
 	switch mode {
 	case TriggerModeHold, TriggerModeToggle:
@@ -305,8 +344,9 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 	switch profile {
 	case PlatformProfileMacOS:
 		return ResolvedPlatform{
-			Profile:  profile,
-			TargetOS: "darwin",
+			Profile:     profile,
+			Integration: PlatformIntegrationNone,
+			TargetOS:    "darwin",
 			Trigger: ResolvedTrigger{
 				Mode: TriggerModeHold,
 				Hotkey: ResolvedHotkey{
@@ -329,8 +369,9 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 		}
 	case PlatformProfileSteamDeck:
 		return ResolvedPlatform{
-			Profile:  profile,
-			TargetOS: "linux",
+			Profile:     profile,
+			Integration: PlatformIntegrationNone,
+			TargetOS:    "linux",
 			Trigger: ResolvedTrigger{
 				Mode: TriggerModeToggle,
 				Hotkey: ResolvedHotkey{
@@ -353,8 +394,9 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 		}
 	default:
 		return ResolvedPlatform{
-			Profile:  PlatformProfileLinux,
-			TargetOS: "linux",
+			Profile:     PlatformProfileLinux,
+			Integration: PlatformIntegrationNone,
+			TargetOS:    "linux",
 			Trigger: ResolvedTrigger{
 				Mode: TriggerModeHold,
 				Hotkey: ResolvedHotkey{

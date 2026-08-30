@@ -9,9 +9,12 @@ import (
 	"os/exec"
 	"runtime"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
+
+const defaultCommandTimeout = 5 * time.Second
 
 var (
 	ErrNothingCopied    = errors.New("clipboard does not contain any text")
@@ -41,6 +44,7 @@ type SystemClipboard struct {
 	targetOS       string
 	preferredCopy  string
 	preferredPaste string
+	commandTimeout time.Duration
 	lookupPath     pathLookup
 	lookupEnv      envLookup
 	execCommand    commandExecutor
@@ -50,20 +54,25 @@ type SystemClipboard struct {
 }
 
 func NewSystem(logger *zap.Logger, enablePaste bool) *SystemClipboard {
-	return NewSystemForConfig(logger, enablePaste, runtime.GOOS, "", "")
+	return NewSystemForConfig(logger, enablePaste, defaultCommandTimeout, runtime.GOOS, "", "")
 }
 
 func NewSystemForOS(logger *zap.Logger, enablePaste bool, targetOS string) *SystemClipboard {
-	return NewSystemForConfig(logger, enablePaste, targetOS, "", "")
+	return NewSystemForConfig(logger, enablePaste, defaultCommandTimeout, targetOS, "", "")
 }
 
-func NewSystemForConfig(logger *zap.Logger, enablePaste bool, targetOS string, preferredCopy string, preferredPaste string) *SystemClipboard {
+func NewSystemForConfig(logger *zap.Logger, enablePaste bool, commandTimeout time.Duration, targetOS string, preferredCopy string, preferredPaste string) *SystemClipboard {
+	if commandTimeout <= 0 {
+		commandTimeout = defaultCommandTimeout
+	}
+
 	return &SystemClipboard{
 		logger:         logger,
 		enablePaste:    enablePaste,
 		targetOS:       targetOS,
 		preferredCopy:  preferredCopy,
 		preferredPaste: preferredPaste,
+		commandTimeout: commandTimeout,
 		lookupPath:     exec.LookPath,
 		lookupEnv:      os.Getenv,
 		execCommand:    runCommand,
@@ -90,7 +99,7 @@ func (c *SystemClipboard) Copy(ctx context.Context, text string) error {
 		return err
 	}
 
-	if err := c.execCommand(ctx, spec); err != nil {
+	if err := c.execute(ctx, spec); err != nil {
 		return fmt.Errorf("execute clipboard copy: %w", err)
 	}
 
@@ -123,7 +132,7 @@ func (c *SystemClipboard) Paste(ctx context.Context) error {
 		return err
 	}
 
-	if err := c.execCommand(ctx, spec); err != nil {
+	if err := c.execute(ctx, spec); err != nil {
 		return fmt.Errorf("execute clipboard paste: %w", err)
 	}
 
@@ -248,10 +257,33 @@ func (c *SystemClipboard) canTypeDirectly() bool {
 	return err == nil
 }
 
+func (c *SystemClipboard) execute(ctx context.Context, spec commandSpec) error {
+	timeout := c.commandTimeout
+	if timeout <= 0 {
+		timeout = defaultCommandTimeout
+	}
+
+	commandCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	return c.execCommand(commandCtx, spec)
+}
+
 func runCommand(ctx context.Context, spec commandSpec) error {
 	cmd := exec.CommandContext(ctx, spec.name, spec.args...)
 	if spec.stdin != "" {
 		cmd.Stdin = bytes.NewBufferString(spec.stdin)
+	}
+
+	if spec.name == "wl-copy" {
+		// wl-copy intentionally keeps a background process alive as the
+		// Wayland clipboard owner. Do not give it pipes used by
+		// CombinedOutput: the child inherits them and makes the caller wait
+		// until the clipboard is replaced.
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	output, err := cmd.CombinedOutput()

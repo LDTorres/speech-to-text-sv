@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +38,11 @@ type ApplyInput struct {
 type ApplyResult struct {
 	Config  DaemonConfig  `json:"config"`
 	Service ServiceStatus `json:"service"`
+}
+
+type modelSource struct {
+	revision  string
+	checksums map[string]string
 }
 
 func GetDaemonConfig(install ServiceInstall) (DaemonConfig, error) {
@@ -76,6 +82,11 @@ func ApplyDaemonConfig(ctx context.Context, install ServiceInstall, input ApplyI
 	if err != nil {
 		return ApplyResult{}, err
 	}
+	values, err := configpkg.ReadEnvFile(install.EnvironmentFile)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	source := modelSourceFromValues(values)
 
 	updates := map[string]string{}
 
@@ -108,7 +119,7 @@ func ApplyDaemonConfig(ctx context.Context, install ServiceInstall, input ApplyI
 	if input.Model != nil {
 		model := strings.TrimSpace(*input.Model)
 		if model != current.Model {
-			modelPath, err := ensureModelDownloaded(ctx, install, model)
+			modelPath, err := ensureModelDownloaded(ctx, install, model, source)
 			if err != nil {
 				return ApplyResult{}, err
 			}
@@ -152,7 +163,7 @@ func MarshalJSON(v any) ([]byte, error) {
 	return json.MarshalIndent(v, "", "  ")
 }
 
-func ensureModelDownloaded(ctx context.Context, install ServiceInstall, model string) (string, error) {
+func ensureModelDownloaded(ctx context.Context, install ServiceInstall, model string, source modelSource) (string, error) {
 	if !isSupportedModel(model) {
 		return "", fmt.Errorf("unsupported model: %s", model)
 	}
@@ -164,12 +175,15 @@ func ensureModelDownloaded(ctx context.Context, install ServiceInstall, model st
 
 	modelPath := filepath.Join(modelDir, modelFileName(model))
 	if _, err := os.Stat(modelPath); err == nil {
+		if err := verifyModelChecksum(modelPath, source.checksums[model]); err != nil {
+			return "", err
+		}
 		return modelPath, nil
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("stat model: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelURL(model), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelURL(model, source.revision), nil)
 	if err != nil {
 		return "", fmt.Errorf("build model request: %w", err)
 	}
@@ -192,7 +206,8 @@ func ensureModelDownloaded(ctx context.Context, install ServiceInstall, model st
 		return "", fmt.Errorf("create temp model file: %w", err)
 	}
 
-	if _, err := io.Copy(file, resp.Body); err != nil {
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(file, hash), resp.Body); err != nil {
 		_ = file.Close()
 		_ = os.Remove(tempFile)
 		return "", fmt.Errorf("write model: %w", err)
@@ -200,6 +215,13 @@ func ensureModelDownloaded(ctx context.Context, install ServiceInstall, model st
 	if err := file.Close(); err != nil {
 		_ = os.Remove(tempFile)
 		return "", fmt.Errorf("close model file: %w", err)
+	}
+	if expectedChecksum := source.checksums[model]; expectedChecksum != "" {
+		actualChecksum := fmt.Sprintf("%x", hash.Sum(nil))
+		if actualChecksum != expectedChecksum {
+			_ = os.Remove(tempFile)
+			return "", fmt.Errorf("model checksum mismatch for %s", model)
+		}
 	}
 	if err := os.Rename(tempFile, modelPath); err != nil {
 		_ = os.Remove(tempFile)
@@ -235,8 +257,48 @@ func modelFileName(model string) string {
 	return "ggml-" + model + ".bin"
 }
 
-func modelURL(model string) string {
-	return "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" + modelFileName(model)
+func modelURL(model string, revision string) string {
+	return "https://huggingface.co/ggerganov/whisper.cpp/resolve/" + revision + "/" + modelFileName(model)
+}
+
+func modelSourceFromValues(values map[string]string) modelSource {
+	revision := strings.TrimSpace(values["STTD_MODEL_REVISION"])
+	if revision == "" {
+		revision = "main"
+	}
+
+	return modelSource{
+		revision: revision,
+		checksums: map[string]string{
+			"tiny":  strings.TrimSpace(values["STTD_MODEL_SHA256_TINY"]),
+			"base":  strings.TrimSpace(values["STTD_MODEL_SHA256_BASE"]),
+			"small": strings.TrimSpace(values["STTD_MODEL_SHA256_SMALL"]),
+		},
+	}
+}
+
+func verifyModelChecksum(path string, expectedChecksum string) error {
+	if expectedChecksum == "" {
+		return nil
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open model for checksum: %w", err)
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fmt.Errorf("hash model: %w", err)
+	}
+	if actualChecksum := fmt.Sprintf("%x", hash.Sum(nil)); actualChecksum != expectedChecksum {
+		return fmt.Errorf("model checksum mismatch for %s", filepath.Base(path))
+	}
+
+	return nil
 }
 
 func parseBoolDefault(value string, fallback bool) bool {

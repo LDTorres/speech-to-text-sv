@@ -17,9 +17,9 @@ func TestConfigLoad_DefaultTriggerConfig(t *testing.T) {
 	cfg, err := Load()
 
 	require.NoError(t, err)
-	require.Equal(t, TriggerModeHold, cfg.Trigger.Mode)
-	require.Equal(t, "cmd+shift", cfg.Trigger.Hotkey.Modifiers)
-	require.Equal(t, "space", cfg.Trigger.Hotkey.Key)
+	require.Empty(t, cfg.Trigger.Mode)
+	require.Empty(t, cfg.Trigger.Hotkey.Modifiers)
+	require.Empty(t, cfg.Trigger.Hotkey.Key)
 }
 
 func TestConfigLoad_InvalidTimeout_ReturnsError(t *testing.T) {
@@ -28,6 +28,14 @@ func TestConfigLoad_InvalidTimeout_ReturnsError(t *testing.T) {
 	_, err := Load()
 
 	require.EqualError(t, err, "invalid configuration: shutdown timeout must be greater than zero")
+}
+
+func TestConfigLoad_InvalidClipboardTimeout_ReturnsError(t *testing.T) {
+	t.Setenv("STTD_CLIPBOARD_TIMEOUT", "0s")
+
+	_, err := Load()
+
+	require.EqualError(t, err, "invalid configuration: clipboard timeout must be greater than zero")
 }
 
 func TestConfigLoad_InvalidPlatformProfile_ReturnsError(t *testing.T) {
@@ -147,6 +155,19 @@ func TestResolvePlatform_InputDeviceOverrideTakesPrecedence(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "alsa_input.usb-test", resolved.Audio.InputDevice)
+}
+
+func TestResolvePlatform_HyprlandIntegrationEnablesExternalControl(t *testing.T) {
+	resolved, err := Config{
+		Platform: PlatformConfig{
+			Profile:     PlatformProfileLinux,
+			Integration: PlatformIntegrationHyprland,
+		},
+	}.ResolvePlatform("linux")
+
+	require.NoError(t, err)
+	require.Equal(t, PlatformIntegrationHyprland, resolved.Integration)
+	require.True(t, resolved.ExternalControl.Enabled)
 }
 
 func TestResolvePlatform_RejectsWrongOSForProfile(t *testing.T) {

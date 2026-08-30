@@ -3,12 +3,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/version.sh
+source "${ROOT_DIR}/scripts/lib/version.sh"
 
 TARGET_OS="${TARGET_OS:-linux}"
 TARGET_ARCH="${TARGET_ARCH:-amd64}"
-RELEASE_VERSION="${RELEASE_VERSION:-$(git -C "${ROOT_DIR}" describe --tags --always --dirty 2>/dev/null || printf 'dev')}"
-RELEASE_TITLE="${RELEASE_TITLE:-${RELEASE_VERSION}}"
-ARCHIVE_PATH="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
+RELEASE_VERSION="${RELEASE_VERSION:-}"
+RELEASE_BUMP=""
+RELEASE_TITLE="${RELEASE_TITLE:-}"
+ARCHIVE_PATH=""
+CHECKSUM_PATH=""
 TARGET_REF="${TARGET_REF:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
 RELEASE_REPO="${RELEASE_REPO:-}"
 NOTES_FILE=""
@@ -18,6 +22,10 @@ DRAFT=false
 PRERELEASE=false
 LATEST=false
 SKIP_BUILD=false
+
+print_step() {
+  printf '\n==> [%s/%s] %s\n' "$1" "$2" "$3"
+}
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -31,6 +39,9 @@ usage() {
 usage: ./scripts/publish-release.sh [options]
 
 options:
+  --major               calculate the next major version from existing tags
+  --minor               calculate the next minor version from existing tags
+  --patch               calculate the next patch version from existing tags
   --tag <tag>           release tag/version to publish
   --title <title>       release title
   --notes <text>        release notes text
@@ -51,10 +62,26 @@ environment:
 EOF
 }
 
+set_release_bump() {
+  if [[ -n "${RELEASE_BUMP}" ]]; then
+    printf 'only one version bump may be selected\n' >&2
+    exit 1
+  fi
+  RELEASE_BUMP="$1"
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --major|--minor|--patch)
+        set_release_bump "${1#--}"
+        shift
+        ;;
       --tag)
+        if [[ $# -lt 2 ]]; then
+          printf 'missing value for --tag\n' >&2
+          exit 1
+        fi
         RELEASE_VERSION="$2"
         shift 2
         ;;
@@ -100,14 +127,27 @@ parse_args() {
     esac
   done
 
+  if [[ -n "${RELEASE_BUMP}" ]]; then
+    RELEASE_VERSION="$(sttd_next_version "${RELEASE_BUMP}")"
+  elif [[ -z "${RELEASE_VERSION}" ]]; then
+    printf 'release version is required; use --tag <version> or --major/--minor/--patch\n' >&2
+    exit 1
+  fi
+  RELEASE_VERSION="$(sttd_normalize_version "${RELEASE_VERSION}")"
+  if sttd_worktree_is_dirty; then
+    printf 'refusing to publish from a dirty worktree; commit changes before publishing\n' >&2
+    exit 1
+  fi
+
   ARCHIVE_PATH="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
+  CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
   if [[ -z "${RELEASE_TITLE}" ]]; then
     RELEASE_TITLE="${RELEASE_VERSION}"
   fi
 }
 
 ensure_archive() {
-  if [[ -f "${ARCHIVE_PATH}" ]]; then
+  if [[ -f "${ARCHIVE_PATH}" && -f "${CHECKSUM_PATH}" ]]; then
     return
   fi
 
@@ -119,6 +159,11 @@ ensure_archive() {
   printf 'release archive missing, running build-release...\n'
   TARGET_OS="${TARGET_OS}" TARGET_ARCH="${TARGET_ARCH}" RELEASE_VERSION="${RELEASE_VERSION}" \
     "${ROOT_DIR}/scripts/build-release.sh"
+
+  if [[ ! -f "${CHECKSUM_PATH}" ]]; then
+    printf 'release checksum not found after build: %s\n' "${CHECKSUM_PATH}" >&2
+    exit 1
+  fi
 }
 
 gh_release_exists() {
@@ -152,7 +197,7 @@ resolve_release_repo() {
 
 create_release() {
   local args=(
-    release create "${RELEASE_VERSION}" "${ARCHIVE_PATH}"
+    release create "${RELEASE_VERSION}" "${ARCHIVE_PATH}" "${CHECKSUM_PATH}"
     --repo "${RELEASE_REPO}"
     --target "${TARGET_REF}"
     --title "${RELEASE_TITLE}"
@@ -205,25 +250,31 @@ update_release() {
   fi
 
   gh "${edit_args[@]}"
-  gh release upload "${RELEASE_VERSION}" "${ARCHIVE_PATH}" --repo "${RELEASE_REPO}" --clobber
+  gh release upload "${RELEASE_VERSION}" "${ARCHIVE_PATH}" "${CHECKSUM_PATH}" --repo "${RELEASE_REPO}" --clobber
 }
 
 main() {
   need_cmd gh
   need_cmd git
+  need_cmd sha256sum
 
   parse_args "$@"
+
+  print_step 1 4 "resolving the GitHub repository and release assets"
   resolve_release_repo
   ensure_archive
 
+  print_step 2 4 "validating GitHub authentication"
   gh auth status >/dev/null
 
+  print_step 3 4 "creating or updating release ${RELEASE_VERSION}"
   if gh_release_exists; then
     update_release
   else
     create_release
   fi
 
+  print_step 4 4 "confirming published release assets"
   printf 'published release: %s\n' "${RELEASE_VERSION}"
   printf 'asset: %s\n' "${ARCHIVE_PATH}"
 }

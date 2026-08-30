@@ -3,8 +3,10 @@ package linux
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,6 +150,10 @@ func (r *PWRecordRecorder) Stop(ctx context.Context) (audio.Recording, error) {
 		return audio.Recording{}, ctx.Err()
 	}
 
+	if !recordingLooksUsable(recording.Path) {
+		return audio.Recording{}, errors.New("pw-record produced no audio frames")
+	}
+
 	return recording, nil
 }
 
@@ -169,12 +175,43 @@ type execProcess struct {
 }
 
 func recordingLooksUsable(path string) bool {
-	info, err := os.Stat(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return false
 	}
+	defer func() {
+		_ = file.Close()
+	}()
 
-	return !info.IsDir() && info.Size() > 0
+	info, err := file.Stat()
+	if err != nil || info.IsDir() || info.Size() <= 44 {
+		return false
+	}
+
+	data, err := io.ReadAll(file)
+	if err != nil || len(data) < 44 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return false
+	}
+
+	for offset := 12; offset+8 <= len(data); {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		chunkStart := offset + 8
+		chunkEnd := chunkStart + chunkSize
+		if chunkEnd > len(data) {
+			return false
+		}
+		if chunkID == "data" {
+			return chunkSize > 0
+		}
+
+		offset = chunkEnd
+		if chunkSize%2 != 0 {
+			offset++
+		}
+	}
+
+	return false
 }
 
 func (p *execProcess) Start() error {

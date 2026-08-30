@@ -3,25 +3,122 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/version.sh
+source "${ROOT_DIR}/scripts/lib/version.sh"
 
 TARGET_OS="${TARGET_OS:-linux}"
 TARGET_ARCH="${TARGET_ARCH:-amd64}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-${TARGET_OS}/${TARGET_ARCH}}"
 WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION:-v1.8.4}"
-RELEASE_VERSION="${RELEASE_VERSION:-$(git -C "${ROOT_DIR}" describe --tags --always --dirty 2>/dev/null || printf 'dev')}"
+WHISPER_ACCELERATION="${WHISPER_ACCELERATION:-cpu}"
+GO_BUILD_TAGS="${GO_BUILD_TAGS:-x11hotkey}"
+RELEASE_VERSION="${RELEASE_VERSION:-}"
+RELEASE_BUMP=""
+VERSION_REQUESTED=false
+ALLOW_DIRTY=false
 WHISPER_BINARY_NAME="whisper-cli-${WHISPER_CPP_VERSION}"
 WHISPER_BINARY_REAL_NAME="${WHISPER_BINARY_NAME}.real"
 WHISPER_BINARY_SOURCE_PATH="${WHISPER_BINARY_SOURCE_PATH:-}"
-RELEASE_DIR="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}"
-ARCHIVE_PATH="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
+RELEASE_DIR=""
+ARCHIVE_PATH=""
 RUNTIME_BIN_DIR="${RELEASE_DIR}/.sttd/bin"
 PROFILES_DIR="${RELEASE_DIR}/profiles"
+
+print_step() {
+  printf '\n==> [%s/%s] %s\n' "$1" "$2" "$3"
+}
+
+if [[ -n "${RELEASE_VERSION}" ]]; then
+  VERSION_REQUESTED=true
+fi
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     printf 'missing required command: %s\n' "$1" >&2
     exit 1
   fi
+}
+
+usage() {
+  cat <<'EOF'
+usage: ./scripts/build-release.sh [--major|--minor|--patch] [--version <version>] [--allow-dirty]
+
+options:
+  --major              calculate the next major version from existing tags
+  --minor              calculate the next minor version from existing tags
+  --patch              calculate the next patch version from existing tags
+  --version <version>  build an explicit version, with or without the v prefix
+  --allow-dirty        allow uncommitted changes for local builds
+  --help               show this help
+
+environment:
+  RELEASE_VERSION, WHISPER_ACCELERATION, GO_BUILD_TAGS, TARGET_OS, TARGET_ARCH
+EOF
+}
+
+set_release_bump() {
+  if [[ -n "${RELEASE_BUMP}" ]]; then
+    printf 'only one version bump may be selected\n' >&2
+    exit 1
+  fi
+  RELEASE_BUMP="$1"
+  VERSION_REQUESTED=true
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --major|--minor|--patch)
+        set_release_bump "${1#--}"
+        shift
+        ;;
+      --version)
+        if [[ $# -lt 2 ]]; then
+          printf 'missing value for --version\n' >&2
+          exit 1
+        fi
+        RELEASE_VERSION="$2"
+        VERSION_REQUESTED=true
+        shift 2
+        ;;
+      --allow-dirty)
+        ALLOW_DIRTY=true
+        shift
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        printf 'unknown argument: %s\n' "$1" >&2
+        usage >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+
+resolve_release_version() {
+  if [[ -n "${RELEASE_BUMP}" ]]; then
+    RELEASE_VERSION="$(sttd_next_version "${RELEASE_BUMP}")"
+  elif [[ -z "${RELEASE_VERSION}" ]]; then
+    RELEASE_VERSION="$(git -C "${ROOT_DIR}" describe --tags --always --dirty 2>/dev/null || printf 'dev')"
+  fi
+
+  if [[ "${VERSION_REQUESTED}" == "true" ]]; then
+    RELEASE_VERSION="$(sttd_normalize_version "${RELEASE_VERSION}")"
+    if [[ "${ALLOW_DIRTY}" != "true" ]] && sttd_worktree_is_dirty; then
+      printf 'refusing versioned build from a dirty worktree; commit changes or use --allow-dirty\n' >&2
+      exit 1
+    fi
+  fi
+}
+
+set_release_paths() {
+  RELEASE_DIR="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}"
+  ARCHIVE_PATH="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
+  RUNTIME_BIN_DIR="${RELEASE_DIR}/.sttd/bin"
+  PROFILES_DIR="${RELEASE_DIR}/profiles"
 }
 
 stage_whisper_runtime() {
@@ -38,33 +135,28 @@ stage_whisper_runtime() {
     return
   fi
 
-  TARGET_PLATFORM="${TARGET_PLATFORM}" OUTPUT_DIR="${RUNTIME_BIN_DIR}" WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION}" \
+  TARGET_PLATFORM="${TARGET_PLATFORM}" OUTPUT_DIR="${RUNTIME_BIN_DIR}" \
+    WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION}" WHISPER_ACCELERATION="${WHISPER_ACCELERATION}" \
     "${ROOT_DIR}/scripts/build-whisper-cli-container.sh"
 
   mv "${RUNTIME_BIN_DIR}/${WHISPER_BINARY_NAME}" "${RUNTIME_BIN_DIR}/${WHISPER_BINARY_REAL_NAME}"
 }
 
 build_go_binary() {
-  if [[ "${TARGET_OS}" == "linux" ]]; then
-    TARGET_PLATFORM="${TARGET_PLATFORM}" TARGET_ARCH="${TARGET_ARCH}" OUTPUT_DIR="${RELEASE_DIR}" \
-      "${ROOT_DIR}/scripts/build-go-linux-container.sh"
-    chmod +x "${RELEASE_DIR}/sttd"
-    (
-      cd "${ROOT_DIR}"
-      CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" \
-        go build -o "${RELEASE_DIR}/sttdctl" ./cmd/sttdctl
-    )
-    chmod +x "${RELEASE_DIR}/sttdctl"
-    return
+  if [[ "${TARGET_OS}" != "linux" || "${TARGET_ARCH}" != "amd64" ]]; then
+    printf 'unsupported release target: %s/%s; official releases currently support linux/amd64 only\n' "${TARGET_OS}" "${TARGET_ARCH}" >&2
+    exit 1
   fi
 
+  TARGET_PLATFORM="${TARGET_PLATFORM}" TARGET_ARCH="${TARGET_ARCH}" OUTPUT_DIR="${RELEASE_DIR}" \
+    GO_BUILD_TAGS="${GO_BUILD_TAGS}" "${ROOT_DIR}/scripts/build-go-linux-container.sh"
+  chmod +x "${RELEASE_DIR}/sttd"
   (
     cd "${ROOT_DIR}"
     CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" \
-      go build -o "${RELEASE_DIR}/sttd" ./cmd/sttd
-    CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" \
       go build -o "${RELEASE_DIR}/sttdctl" ./cmd/sttdctl
   )
+  chmod +x "${RELEASE_DIR}/sttdctl"
 }
 
 create_whisper_wrapper() {
@@ -73,7 +165,12 @@ create_whisper_wrapper() {
 set -euo pipefail
 
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-export LD_LIBRARY_PATH="\${SCRIPT_DIR}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
+DRIVER_LIBRARY_PATH=""
+if [[ -d /run/opengl-driver/lib ]]; then
+  # NixOS exposes the active NVIDIA driver through this runtime path.
+  DRIVER_LIBRARY_PATH=:/run/opengl-driver/lib
+fi
+export LD_LIBRARY_PATH="\${SCRIPT_DIR}\${DRIVER_LIBRARY_PATH}\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
 exec "\${SCRIPT_DIR}/${WHISPER_BINARY_REAL_NAME}" "\$@"
 EOF
   chmod +x "${RUNTIME_BIN_DIR}/${WHISPER_BINARY_NAME}"
@@ -82,19 +179,8 @@ EOF
 stage_profile_templates() {
   mkdir -p "${PROFILES_DIR}"
 
-  case "${TARGET_OS}" in
-    linux)
-      cp "${ROOT_DIR}/.env.linux.example" "${PROFILES_DIR}/linux.env"
-      cp "${ROOT_DIR}/.env.steam_deck.example" "${PROFILES_DIR}/steam_deck.env"
-      ;;
-    darwin)
-      cp "${ROOT_DIR}/.env.macos.example" "${PROFILES_DIR}/macos.env"
-      ;;
-    *)
-      printf 'unsupported target os for profile templates: %s\n' "${TARGET_OS}" >&2
-      exit 1
-      ;;
-  esac
+  cp "${ROOT_DIR}/.env.linux.example" "${PROFILES_DIR}/linux.env"
+  cp "${ROOT_DIR}/.env.steam_deck.example" "${PROFILES_DIR}/steam_deck.env"
 }
 
 stage_release_files() {
@@ -113,35 +199,50 @@ stage_release_files() {
   cp "${ROOT_DIR}/scripts/uninstall-whisper.sh" "${RELEASE_DIR}/uninstall.sh"
   chmod +x "${RELEASE_DIR}/uninstall.sh"
 
+  cp "${ROOT_DIR}/scripts/doctor.sh" "${RELEASE_DIR}/doctor.sh"
+  chmod +x "${RELEASE_DIR}/doctor.sh"
+
   mkdir -p "${RELEASE_DIR}/scripts/lib"
   cp "${ROOT_DIR}/scripts/speech-to-text.service.template" "${RELEASE_DIR}/scripts/speech-to-text.service.template"
   cp "${ROOT_DIR}/scripts/lib/model.sh" "${RELEASE_DIR}/scripts/lib/model.sh"
 
   cp "${ROOT_DIR}/LICENSE" "${RELEASE_DIR}/LICENSE"
+  cp "${ROOT_DIR}/INSTALL.md" "${RELEASE_DIR}/INSTALL.md"
+  printf '%s\n' "${RELEASE_VERSION}" > "${RELEASE_DIR}/VERSION"
 }
 
 package_release() {
   mkdir -p "$(dirname "${ARCHIVE_PATH}")"
   tar -czf "${ARCHIVE_PATH}" -C "$(dirname "${RELEASE_DIR}")" "$(basename "${RELEASE_DIR}")"
+  (
+    cd "$(dirname "${ARCHIVE_PATH}")"
+    sha256sum "$(basename "${ARCHIVE_PATH}")" > "$(basename "${ARCHIVE_PATH}").sha256"
+  )
 }
 
 main() {
   need_cmd go
   need_cmd tar
+  need_cmd sha256sum
 
-  printf 'preparing release workspace: %s\n' "${RELEASE_DIR}"
+  parse_args "$@"
+  resolve_release_version
+  set_release_paths
+
+  print_step 1 5 "preparing release workspace: ${RELEASE_DIR}"
   rm -rf "${RELEASE_DIR}"
   mkdir -p "${RELEASE_DIR}" "${RUNTIME_BIN_DIR}"
 
-  printf 'building go binaries...\n'
+  print_step 2 5 "building Go binaries"
   build_go_binary
-  printf 'building whisper runtime...\n'
+  print_step 3 5 "building the whisper runtime"
   stage_whisper_runtime
-  printf 'staging release files...\n'
+  print_step 4 5 "staging release files"
   stage_release_files
-  printf 'packaging release archive...\n'
+  print_step 5 5 "packaging and checksumming the release archive"
   package_release
 
+  printf '\nrelease build completed successfully\n'
   printf 'release directory: %s\n' "${RELEASE_DIR}"
   printf 'release archive: %s\n' "${ARCHIVE_PATH}"
 }

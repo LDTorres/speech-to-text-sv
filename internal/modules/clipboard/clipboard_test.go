@@ -3,7 +3,10 @@ package clipboard
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -123,6 +126,35 @@ func TestClipboard_Copy_OnX11_WithoutXclip_SucceedsWhenDirectTypingIsAvailable(t
 	require.Equal(t, "hello deck", clipboard.lastText)
 }
 
+func TestClipboard_Copy_CommandTimeoutReturnsError(t *testing.T) {
+	t.Parallel()
+
+	clipboard := newTestClipboard("linux", true)
+	clipboard.commandTimeout = 10 * time.Millisecond
+	clipboard.execCommand = func(ctx context.Context, _ commandSpec) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	err := clipboard.Copy(context.Background(), "timeout me")
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestRunCommand_WlCopyDoesNotWaitForDetachedOwner(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wl-copy")
+	script := "#!/bin/sh\n(sleep 1) >&2 &\nexit 0\n"
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	started := time.Now()
+	err := runCommand(context.Background(), commandSpec{name: "wl-copy"})
+
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 500*time.Millisecond)
+}
+
 func TestClipboard_Darwin_UsesPbcopyAndOsascript(t *testing.T) {
 	t.Parallel()
 
@@ -150,9 +182,10 @@ type testClipboard struct {
 func newTestClipboard(targetOS string, enablePaste bool) *testClipboard {
 	tc := &testClipboard{}
 	tc.SystemClipboard = &SystemClipboard{
-		logger:      zap.NewNop(),
-		enablePaste: enablePaste,
-		targetOS:    targetOS,
+		logger:         zap.NewNop(),
+		enablePaste:    enablePaste,
+		targetOS:       targetOS,
+		commandTimeout: 5 * time.Second,
 		lookupPath: func(name string) (string, error) {
 			switch name {
 			case "pbcopy", "osascript", "wl-copy", "wtype", "xdotool", "xclip":

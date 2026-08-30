@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install script tooling
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+
+      - name: Test Go packages
+        run: go test ./...
+
+      - name: Validate shell scripts
+        run: |
+          bash -n scripts/*.sh scripts/lib/*.sh
+          shellcheck scripts/*.sh scripts/lib/*.sh
+
+      - name: Build and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ github.repository }}
+          TARGET_REF: ${{ github.sha }}
+        run: |
+          release_args=(--tag "${GITHUB_REF_NAME}")
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+          ./scripts/publish-release.sh "${release_args[@]}"

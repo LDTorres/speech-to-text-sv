@@ -58,7 +58,7 @@ func New(ctx context.Context) (*Bootstrap, error) {
 		cfg.Transcribe.Language,
 		cfg.Transcribe.Timeout,
 	)
-	clipboard := platform.NewClipboard(logger, cfg.Clipboard.EnablePaste, resolvedPlatform)
+	clipboard := platform.NewClipboard(logger, cfg.Clipboard.EnablePaste, cfg.Clipboard.Timeout, resolvedPlatform)
 
 	var notifier notify.Notifier = notify.NewNoop()
 

@@ -1,6 +1,6 @@
 # speech-to-text-sv
 
-Local-first speech-to-text daemon for `macOS`, `Linux`, and `Steam Deck`, using `whisper.cpp` as the offline transcription engine.
+Local-first speech-to-text daemon for `macOS`, `Linux`, and `Steam Deck`, using `whisper.cpp` as the offline transcription engine. Published packages currently target `linux/amd64`; macOS is supported through the local development flow.
 
 The main runtime flow is:
 1. detect a trigger
@@ -62,8 +62,14 @@ Relevant defaults by profile:
 - `docker` for local `dev-setup` of the `whisper.cpp` runtime
 - `pw-record` for audio capture
 - clipboard/input tooling depending on session type:
-  - X11: `xdotool`
+  - X11: `xclip` and `xdotool`
   - Wayland: `wl-copy` and `wtype`
+- X11 development and the packaged global hotkey require X11 development/runtime libraries
+
+For a CUDA-enabled Linux runtime, the build uses the official NVIDIA CUDA
+container image and does not require the CUDA toolkit to be installed on the
+host. The target machine still needs a working NVIDIA driver compatible with
+the bundled CUDA runtime. CPU remains the default build mode.
 
 ## Quick start
 
@@ -84,6 +90,12 @@ make dev-setup PROFILE=macos MODEL=small
 make dev-setup PROFILE=steam_deck MODEL=base LANGUAGE=es
 ```
 
+On an NVIDIA Linux machine, request the CUDA runtime explicitly:
+
+```bash
+WHISPER_ACCELERATION=cuda make dev-setup PROFILE=linux MODEL=small LANGUAGE=es
+```
+
 This does the following:
 
 - creates `.env` if it does not exist, using the selected profile template
@@ -99,7 +111,7 @@ This does the following:
 Then run:
 
 ```bash
-go run ./cmd/sttd
+make run
 ```
 
 ### Change the model in development
@@ -138,22 +150,54 @@ Important:
 
 ### Release
 
-Build the release:
+Build an explicit release version:
 
 ```bash
+make build-release RELEASE_BUMP=patch
+```
+
+Official releases currently target `linux/amd64` and are built with the
+`x11hotkey` build tag. On Wayland/Hyprland, use external control and desktop
+bindings instead of relying on an X11 global hotkey.
+
+The release defaults to a CPU `whisper.cpp` runtime. To build the Linux
+release with CUDA acceleration:
+
+```bash
+WHISPER_ACCELERATION=cuda make build-release
+```
+
+`WHISPER_ACCELERATION` accepts `cpu` or `cuda`. It is a build-time choice; the
+selected runtime is bundled into the release and the wrapper adds its local
+libraries to `LD_LIBRARY_PATH`.
+
+For the RTX 2070 Super, use CUDA architecture `75` and limit build parallelism
+if the machine starts using swap:
+
+```bash
+WHISPER_ACCELERATION=cuda \
+WHISPER_CUDA_ARCHITECTURES=75 \
+WHISPER_BUILD_JOBS=2 \
 make build-release
 ```
+
+`WHISPER_CUDA_ARCHITECTURES` is optional for portable CUDA builds. The value
+`75` is specific to the RTX 2070 Super and reduces unnecessary CUDA targets.
+`WHISPER_BUILD_JOBS` defaults to `2` for predictable memory usage.
 
 This produces:
 
 - `dist/release/sttd-<version>-linux-amd64/`
 - `dist/release/sttd-<version>-linux-amd64.tar.gz`
+- `dist/release/sttd-<version>-linux-amd64.tar.gz.sha256`
 
-Publish the release to GitHub Releases:
+Publish the release to GitHub Releases with an explicit version or bump:
 
 ```bash
-make publish-release
+make publish-release RELEASE_BUMP=patch
 ```
+
+End users can download published archives from the [GitHub Releases page](https://github.com/LDTorres/speech-to-text-sv/releases).
 
 Useful variants:
 
@@ -168,9 +212,32 @@ make publish-release RELEASE_VERSION=v0.1.0
 
 - uses `gh release`
 - uploads `dist/release/sttd-<version>-linux-amd64.tar.gz`
+- uploads the matching SHA-256 checksum
 - creates the release if it does not exist
 - updates the release and re-uploads the asset with `--clobber` if it already exists
 - runs `build-release` automatically if the archive is missing, unless `--skip-build` is used
+
+Version bumps are calculated from the greatest numeric `vMAJOR.MINOR.PATCH`
+tag in the repository. Existing suffixes such as `-nox11` and `-rc6` are used
+as the same `0.1.4` version base, so the next patch release is `v0.1.5`.
+Publications require an explicit version/bump and a clean worktree.
+
+Examples:
+
+```bash
+./scripts/build-release.sh --patch
+./scripts/build-release.sh --minor
+./scripts/build-release.sh --major
+make build-release RELEASE_BUMP=patch
+./scripts/publish-release.sh --patch
+```
+
+An explicit version is also supported:
+
+```bash
+./scripts/build-release.sh --version v0.1.5
+./scripts/publish-release.sh --tag v0.1.5
+```
 
 Release layout:
 
@@ -179,25 +246,57 @@ Release layout:
 - `install.sh`
 - `change-model.sh`
 - `uninstall.sh`
+- `doctor.sh`
+- `INSTALL.md`
+- `VERSION`
 - `profiles/`
 - `.sttd/bin/`
 - `scripts/speech-to-text.service.template`
 
-Install a release:
+For end-user installation, follow the complete instructions packaged in
+[`INSTALL.md`](./INSTALL.md). In short:
 
 ```bash
-./install.sh --profile linux
-./install.sh --profile steam_deck
-./install.sh --profile steam_deck --as-service
+sha256sum -c sttd-<version>-linux-amd64.tar.gz.sha256
+tar -xzf sttd-<version>-linux-amd64.tar.gz
+cd sttd-<version>-linux-amd64
+./install.sh --check --profile linux
+./install.sh --profile linux --language es --as-service
 ```
 
 Recommended for Spanish-first usage:
 
 ```bash
-./install.sh --profile linux --language es
-./install.sh --profile steam_deck --language es
 ./install.sh --profile steam_deck --language es --as-service
 ```
+
+The installer copies the active release to `~/.local/opt/sttd`. Re-running
+`install.sh` from a newer extracted release updates that stable location while
+preserving the existing configuration and downloaded models.
+
+On Hyprland, enable the optional Wayland integration. It uses a user-only Unix
+socket and lets Hyprland bindings control the daemon without an X11 hotkey:
+
+```bash
+./install.sh --profile linux --integration hyprland --language es --as-service
+```
+
+For hold mode, add bindings similar to these to the user's Hyprland bindings
+file:
+
+```ini
+bind = $mainMod, D, exec, /home/TU_USUARIO/.local/opt/sttd/sttdctl control start
+bindr = $mainMod, D, exec, /home/TU_USUARIO/.local/opt/sttd/sttdctl control stop
+```
+
+For toggle mode, configure `STTD_TRIGGER_MODE=toggle` and use one binding:
+
+```ini
+bind = $mainMod, D, exec, /home/TU_USUARIO/.local/opt/sttd/sttdctl control toggle
+```
+
+The binding and socket path remain configurable; the installer does not edit
+Hyprland configuration automatically.
 
 You can also select the model and language during installation:
 
@@ -209,8 +308,8 @@ You can also select the model and language during installation:
 Change the model after installation:
 
 ```bash
-./change-model.sh
-./change-model.sh --model tiny
+~/.local/opt/sttd/change-model.sh
+~/.local/opt/sttd/change-model.sh --model tiny
 ```
 
 If the `speech-to-text.service` user service is active, `change-model.sh` restarts it automatically. If you are running `sttd` manually in the foreground, restart it yourself.
@@ -218,17 +317,17 @@ If the `speech-to-text.service` user service is active, `change-model.sh` restar
 Uninstall:
 
 ```bash
-./uninstall.sh
+~/.local/opt/sttd/uninstall.sh
 ```
 
 `uninstall.sh`:
 
 - removes the `speech-to-text.service` user service if present
-- removes `./.sttd/models`
-- does not remove `./.sttd/bin`
-- does not remove `.env`
+- removes `~/.local/opt/sttd/.sttd/models`
+- keeps binaries and `.env` by default
+- accepts `--purge` to remove the complete installation and logs
 
-If you want to remove everything else, delete the release directory manually.
+Use `~/.local/opt/sttd/uninstall.sh --purge` to remove everything.
 
 ### Logs
 
@@ -239,8 +338,8 @@ If installed as `speech-to-text.service`, the daemon writes stdout and stderr to
 You can inspect logs through `sttdctl`:
 
 ```bash
-./sttdctl logs path --json
-./sttdctl logs tail --json --lines 200
+~/.local/opt/sttd/sttdctl logs path --json
+~/.local/opt/sttd/sttdctl logs tail --json --lines 200
 ```
 
 ## Configuration
@@ -287,10 +386,17 @@ The default transcription language is `es`.
 - `STTD_TRANSCRIBE_MODEL_PATH`
 - `STTD_TRANSCRIBE_LANGUAGE`
 - `STTD_TRANSCRIBE_TIMEOUT`
+- `STTD_MODEL_REVISION`
+  - defaults to `main`; set an immutable Hugging Face revision for reproducible installs
+- `STTD_MODEL_SHA256_TINY`, `STTD_MODEL_SHA256_BASE`, `STTD_MODEL_SHA256_SMALL`
+  - optional SHA-256 checksums validated while downloading models
 
 #### Clipboard
 
 - `STTD_CLIPBOARD_ENABLE_PASTE`
+- `STTD_CLIPBOARD_TIMEOUT`
+  - maximum time allowed for `wl-copy`, `wtype` or the platform paste command
+  - defaults to `5s`; prevents clipboard integration failures from keeping a session in `processing`
 
 ### Secondary variables
 
@@ -311,6 +417,7 @@ These still exist in config, but currently provide little or no practical value 
 - `make change-model [MODEL=<tiny|base|small>]`
 - `make build-whisper-cli`
 - `make build-release`
+- `make verify-release RELEASE_ARCHIVE=<path>`
 
 ### Scripts
 
@@ -325,7 +432,11 @@ These still exist in config, but currently provide little or no practical value 
 - `scripts/install-whisper.sh`
   - release installer
 - `scripts/uninstall-whisper.sh`
-  - removes models and the user service from the release
+  - removes the user service and, optionally, the installed runtime state
+- `scripts/doctor.sh`
+  - verifies a packaged release and desktop dependencies before installation
+- `scripts/verify-release.sh`
+  - validates a built archive, checksum, required files and X11 hotkey build
 
 ## Contributing
 
@@ -352,7 +463,7 @@ make test
 3. Run the app:
 
 ```bash
-go run ./cmd/sttd
+make run
 ```
 
 4. If you changed packaging or release scripts, also validate:
@@ -374,7 +485,7 @@ Additional engineering rules live in [AGENTS.md](./AGENTS.md).
 
 ## Current limitations
 
-- the packaged release is currently oriented to `linux/amd64`
-- Steam Deck support currently relies on `hotkey`, not `evdev`
+- published packages currently target `linux/amd64`; macOS remains development-only
+- Steam Deck support uses external control when the X11 hotkey is unavailable; it does not use `evdev`
 - the supported script-level model catalog is `tiny`, `base`, `small`
 - `install.sh --as-service` uses `systemd --user`, so it applies to Linux

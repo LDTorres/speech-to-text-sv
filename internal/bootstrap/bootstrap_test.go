@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"os"
 	"runtime"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 )
 
 func TestBootstrap_New_WiresRequiredDependencies(t *testing.T) {
+	setProfileDefaultsForTest(t)
 	if runtime.GOOS == "darwin" {
 		t.Setenv("STTD_PLATFORM_PROFILE", "macos")
 	} else {
@@ -26,6 +28,7 @@ func TestBootstrap_New_WiresRequiredDependencies(t *testing.T) {
 }
 
 func TestBootstrap_New_UsesResolvedPlatformProfile(t *testing.T) {
+	setProfileDefaultsForTest(t)
 	if runtime.GOOS == "darwin" {
 		t.Setenv("STTD_PLATFORM_PROFILE", "macos")
 	} else {
@@ -53,6 +56,7 @@ func TestBootstrap_New_UsesMacOSResolvers(t *testing.T) {
 	}
 
 	t.Setenv("STTD_PLATFORM_PROFILE", "macos")
+	setProfileDefaultsForTest(t)
 	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
 	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
 
@@ -72,6 +76,7 @@ func TestBootstrap_New_UsesSteamDeckResolvers(t *testing.T) {
 	}
 
 	t.Setenv("STTD_PLATFORM_PROFILE", "steam_deck")
+	setProfileDefaultsForTest(t)
 	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
 	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
 
@@ -82,4 +87,29 @@ func TestBootstrap_New_UsesSteamDeckResolvers(t *testing.T) {
 	require.Equal(t, "f12", boot.platform.Trigger.Hotkey.Key)
 	require.Equal(t, "toggle", boot.platform.Trigger.Mode)
 	require.Equal(t, "pw-record", boot.platform.Audio.Backend)
+}
+
+func setProfileDefaultsForTest(t *testing.T) {
+	t.Helper()
+	// Keep repository-local .env files from changing profile defaults.
+	t.Chdir(t.TempDir())
+	for _, key := range []string{
+		"STTD_TRIGGER_MODE",
+		"STTD_TRIGGER_HOTKEY_MODIFIERS",
+		"STTD_TRIGGER_HOTKEY_KEY",
+		"STTD_PLATFORM_INTEGRATION",
+		"STTD_EXTERNAL_CONTROL_ENABLED",
+	} {
+		previous, existed := os.LookupEnv(key)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
+		t.Cleanup(func() {
+			if existed {
+				_ = os.Setenv(key, previous)
+				return
+			}
+			_ = os.Unsetenv(key)
+		})
+	}
 }

@@ -22,6 +22,10 @@ MODEL_DIR="${ROOT_DIR}/.sttd/models"
 MODEL_NAME=""
 SERVICE_NAME="speech-to-text.service"
 
+print_step() {
+  printf '\n==> [%s/%s] %s\n' "$1" "$2" "$3"
+}
+
 usage() {
   cat <<'EOF'
 usage: ./change-model.sh [--model <tiny|base|small>]
@@ -58,7 +62,7 @@ ensure_env_file() {
   fi
 
   if [[ -d "${ROOT_DIR}/profiles" ]]; then
-    printf 'missing .env; run ./install.sh --profile <linux|steam_deck|macos> first\n' >&2
+    printf 'missing .env; run ./install.sh --profile <linux|steam_deck> first\n' >&2
     exit 1
   fi
 
@@ -94,13 +98,21 @@ restart_user_service_if_running() {
 main() {
   parse_args "$@"
 
+  print_step 1 4 "loading the current configuration"
   ensure_env_file
+
+  print_step 2 4 "selecting the model"
   select_model
 
+  print_step 3 4 "ensuring the ${MODEL_NAME} model is available"
+  sttd_load_model_source_config "${ENV_FILE}"
   sttd_ensure_model_downloaded "${MODEL_NAME}" "${MODEL_DIR}"
+
+  print_step 4 4 "applying the model configuration"
   sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_MODEL_PATH" "${STTD_MODEL_PATH}"
   restart_user_service_if_running
 
+  printf '\nmodel change completed successfully\n'
   printf '\nselected model: %s\n' "${MODEL_NAME}"
   printf 'model %s: %s\n' "${STTD_MODEL_ACTION}" "${STTD_MODEL_PATH}"
   printf '.env updated: %s\n' "${ENV_FILE}"

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
 STTD_SUPPORTED_MODELS=(tiny base small)
+# shellcheck disable=SC2034
 STTD_DEFAULT_MODEL=base
+STTD_MODEL_REVISION="${STTD_MODEL_REVISION:-main}"
 
 sttd_model_catalog() {
   printf '%s\n' "${STTD_SUPPORTED_MODELS[@]}"
@@ -128,6 +130,11 @@ sttd_set_env_value() {
   local value="$3"
   local temp_file
 
+  if [[ ! -f "${env_file}" ]]; then
+    printf 'cannot update configuration; file not found: %s\n' "${env_file}" >&2
+    return 1
+  fi
+
   if grep -q "^${key}=" "${env_file}"; then
     temp_file="$(mktemp)"
     awk -v key="${key}" -v value="${value}" '
@@ -166,7 +173,73 @@ sttd_model_url() {
   local model_name="$1"
   local model_file
   model_file="$(sttd_model_file_name "${model_name}")"
-  printf 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/%s\n' "${model_file}"
+  printf 'https://huggingface.co/ggerganov/whisper.cpp/resolve/%s/%s\n' "${STTD_MODEL_REVISION}" "${model_file}"
+}
+
+sttd_model_checksum() {
+  case "$1" in
+    tiny)
+      printf '%s\n' "${STTD_MODEL_SHA256_TINY:-}"
+      ;;
+    base)
+      printf '%s\n' "${STTD_MODEL_SHA256_BASE:-}"
+      ;;
+    small)
+      printf '%s\n' "${STTD_MODEL_SHA256_SMALL:-}"
+      ;;
+  esac
+}
+
+sttd_load_model_source_config() {
+  local env_file="$1"
+  local key value
+
+  if [[ ! -f "${env_file}" ]]; then
+    return
+  fi
+
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      STTD_MODEL_REVISION)
+        if [[ -n "${value}" ]]; then
+          STTD_MODEL_REVISION="${value}"
+        fi
+        ;;
+      STTD_MODEL_SHA256_TINY)
+        STTD_MODEL_SHA256_TINY="${value}"
+        ;;
+      STTD_MODEL_SHA256_BASE)
+        STTD_MODEL_SHA256_BASE="${value}"
+        ;;
+      STTD_MODEL_SHA256_SMALL)
+        STTD_MODEL_SHA256_SMALL="${value}"
+        ;;
+    esac
+  done < "${env_file}"
+}
+
+sttd_verify_model_checksum() {
+  local model_path="$1"
+  local expected_checksum="$2"
+  local actual_checksum
+
+  if [[ -z "${expected_checksum}" ]]; then
+    return
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual_checksum="$(sha256sum "${model_path}" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual_checksum="$(shasum -a 256 "${model_path}" | awk '{print $1}')"
+  else
+    printf 'cannot validate model checksum: install sha256sum or shasum\n' >&2
+    return 1
+  fi
+
+  if [[ "${actual_checksum}" != "${expected_checksum}" ]]; then
+    printf 'model checksum mismatch for %s\n' "${model_path}" >&2
+    return 1
+  fi
 }
 
 sttd_ensure_model_downloaded() {
@@ -174,19 +247,53 @@ sttd_ensure_model_downloaded() {
   local model_dir="$2"
   local model_path
   local model_url
+  local model_checksum
+  local partial_path
+  local curl_args
 
   model_path="$(sttd_model_path "${model_dir}" "${model_name}")"
   model_url="$(sttd_model_url "${model_name}")"
+  model_checksum="$(sttd_model_checksum "${model_name}")"
+  partial_path="${model_path}.part"
 
   mkdir -p "${model_dir}"
 
   if [[ -f "${model_path}" ]]; then
+    printf 'model already available: %s\n' "${model_path}"
+    sttd_verify_model_checksum "${model_path}" "${model_checksum}"
     STTD_MODEL_PATH="${model_path}"
     STTD_MODEL_ACTION="reused"
     return
   fi
 
-  curl -fsSL "${model_url}" -o "${model_path}"
+  printf 'downloading model %s; this may take several minutes\n' "${model_name}"
+  printf 'source: %s\n' "${model_url}"
+  printf 'destination: %s\n' "${model_path}"
+
+  curl_args=(--fail --location --show-error --retry 3 --retry-delay 2 --retry-connrefused)
+  if [[ -t 2 ]]; then
+    curl_args+=(--progress-bar)
+  else
+    curl_args+=(--silent)
+  fi
+
+  rm -f "${partial_path}"
+  if ! curl "${curl_args[@]}" "${model_url}" -o "${partial_path}"; then
+    rm -f "${partial_path}"
+    printf 'download model failed: %s\n' "${model_url}" >&2
+    return 1
+  fi
+  if [[ -n "${model_checksum}" ]]; then
+    printf 'verifying model checksum\n'
+  fi
+  if ! sttd_verify_model_checksum "${partial_path}" "${model_checksum}"; then
+    rm -f "${partial_path}"
+    return 1
+  fi
+  mv "${partial_path}" "${model_path}"
+  printf 'model download completed: %s\n' "${model_path}"
+  # shellcheck disable=SC2034
   STTD_MODEL_PATH="${model_path}"
+  # shellcheck disable=SC2034
   STTD_MODEL_ACTION="downloaded"
 }

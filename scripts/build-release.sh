@@ -154,7 +154,7 @@ build_go_binary() {
   (
     cd "${ROOT_DIR}"
     CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" \
-      go build -o "${RELEASE_DIR}/sttdctl" ./cmd/sttdctl
+      go build -buildvcs=false -o "${RELEASE_DIR}/sttdctl" ./cmd/sttdctl
   )
   chmod +x "${RELEASE_DIR}/sttdctl"
 }

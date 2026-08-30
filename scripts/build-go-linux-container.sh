@@ -56,9 +56,9 @@ main() {
       mkdir -p /out
       mkdir -p /tmp/sttd-build
       if [ -n "$GO_BUILD_TAGS" ]; then
-        go build -tags "$GO_BUILD_TAGS" -o /tmp/sttd-build/sttd ./cmd/sttd
+        go build -buildvcs=false -tags "$GO_BUILD_TAGS" -o /tmp/sttd-build/sttd ./cmd/sttd
       else
-        go build -o /tmp/sttd-build/sttd ./cmd/sttd
+        go build -buildvcs=false -o /tmp/sttd-build/sttd ./cmd/sttd
       fi
       test -x /tmp/sttd-build/sttd
       install -Dm755 /tmp/sttd-build/sttd /out/sttd

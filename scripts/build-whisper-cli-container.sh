@@ -12,6 +12,8 @@ WHISPER_BUILD_JOBS="${WHISPER_BUILD_JOBS:-2}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-linux/amd64}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/dist/whisper/linux-amd64}"
 OUTPUT_BINARY_PATH="${OUTPUT_DIR}/whisper-cli-${WHISPER_CPP_VERSION}"
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
 
 case "${WHISPER_ACCELERATION}" in
   cpu)
@@ -56,6 +58,7 @@ main() {
   docker run \
     --rm \
     --platform "${TARGET_PLATFORM}" \
+    --user "${HOST_UID}:${HOST_GID}" \
     --env "WHISPER_ACCELERATION=${WHISPER_ACCELERATION}" \
     --volume "${OUTPUT_DIR}:/out" \
     "${IMAGE_TAG}" \

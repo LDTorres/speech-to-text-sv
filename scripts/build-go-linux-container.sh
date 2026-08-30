@@ -13,6 +13,8 @@ GO_BUILD_CACHE_DIR="${GO_BUILD_CACHE_DIR:-${ROOT_DIR}/dist/cache/go-build-linux-
 GO_MOD_CACHE_DIR="${GO_MOD_CACHE_DIR:-${ROOT_DIR}/dist/cache/go-mod-linux-${TARGET_ARCH}}"
 GO_BUILD_TAGS="${GO_BUILD_TAGS:-x11hotkey}"
 IMAGE_TAG="sttd-go-linux-builder:${TARGET_ARCH}"
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -38,6 +40,7 @@ main() {
   docker run \
     --rm \
     --platform "${TARGET_PLATFORM}" \
+    --user "${HOST_UID}:${HOST_GID}" \
     --volume "${ROOT_DIR}:/src" \
     --volume "${OUTPUT_DIR}:/out" \
     --volume "${GO_BUILD_CACHE_DIR}:/tmp/gocache" \

@@ -222,7 +222,7 @@ if the machine starts using swap:
 ```bash
 WHISPER_ACCELERATION=cuda \
 WHISPER_CUDA_ARCHITECTURES=75 \
-WHISPER_BUILD_JOBS=2 \
+WHISPER_BUILD_JOBS=6 \
 make build-release
 ```
 

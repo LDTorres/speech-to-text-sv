@@ -27,7 +27,10 @@ func TestResolveSocketPath_RejectsRelativePath(t *testing.T) {
 func TestServer_StopClosesBlockedConnection(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
+	tempDir, err := os.MkdirTemp("/tmp", "sttd-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
+
 	server, err := NewServer(zap.NewNop(), filepath.Join(tempDir, "control.sock"), &stubSessionService{})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -32,7 +33,13 @@ func TestParseBoolFlagAcceptsMixedCase(t *testing.T) {
 }
 
 func TestSendControlRequestTimesOutWhenServerDoesNotRespond(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "control.sock")
+	tempDir, err := os.MkdirTemp("/tmp", "sttd-")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
+
+	socketPath := filepath.Join(tempDir, "control.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen: %v", err)

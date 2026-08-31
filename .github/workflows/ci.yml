@@ -22,7 +22,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install build and script tooling
-        run: sudo apt-get update && sudo apt-get install --yes libx11-dev shellcheck
+        run: sudo apt-get update && sudo apt-get install --yes libx11-dev shellcheck xvfb
 
       - name: Test Go packages
         run: go test ./cmd/... ./internal/...
@@ -31,7 +31,7 @@ jobs:
         run: go test -race ./cmd/... ./internal/...
 
       - name: Test X11 hotkey build
-        run: go test -race -tags x11hotkey ./cmd/... ./internal/...
+        run: xvfb-run -a -s "-screen 0 1024x768x24" go test -race -tags x11hotkey ./cmd/... ./internal/...
 
       - name: Vet Go packages
         run: go vet ./cmd/... ./internal/...

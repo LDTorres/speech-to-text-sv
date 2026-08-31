@@ -88,6 +88,18 @@ and runs the packaged installer. Pin a release with `--version v0.1.5`; use
 `--non-interactive` for automation. Review the bootstrap script before piping
 it to a shell if your environment requires a stricter supply-chain policy.
 
+The default package is CPU-only and keeps the download small. NVIDIA users can
+request the optional CUDA package explicitly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LDTorres/speech-to-text-sv/main/scripts/bootstrap-install.sh \
+  | bash -s -- --interactive --acceleration cuda
+```
+
+The CUDA package is intended for machines with a compatible NVIDIA driver and
+is substantially larger because it bundles the CUDA libraries required at
+runtime.
+
 The installer creates the memorable `listen` command in `~/.local/bin`:
 
 ```bash
@@ -197,24 +209,27 @@ Official releases currently target `linux/amd64` and are built with the
 `x11hotkey` build tag. On Wayland/Hyprland, use external control and desktop
 bindings instead of relying on an X11 global hotkey.
 
-The release defaults to automatic acceleration selection. It packages a CPU
-runtime and, unless explicitly building CPU-only, a CUDA runtime. At runtime
-the wrapper selects CUDA when a usable NVIDIA driver/GPU is detected and
-otherwise uses CPU. You can force the behavior with
-`STTD_TRANSCRIBE_ACCELERATION=auto|cpu|cuda`.
+The default release package contains only the CPU runtime. A separate CUDA
+asset is published for users who need NVIDIA acceleration. The installed
+wrapper still accepts `STTD_TRANSCRIBE_ACCELERATION=auto|cpu|cuda`; `auto` uses
+the runtime included by the selected package.
 
-To build the Linux release with automatic selection and CUDA support:
+Build the CPU release asset:
+
+```bash
+WHISPER_ACCELERATION=cpu make build-release
+```
+
+Build the optional CUDA release asset:
 
 ```bash
 WHISPER_ACCELERATION=cuda make build-release
 ```
 
-`WHISPER_ACCELERATION` accepts `auto`, `cpu` or `cuda`. `cpu` builds a smaller
-CPU-only release. `auto` and `cuda` package both runtimes so the installed
-release can fall back to CPU on machines without NVIDIA support. The CUDA
-runtime is built in the container and the wrapper adds the selected runtime's
-libraries to `LD_LIBRARY_PATH`. Set `WHISPER_CPP_COMMIT` to verify the checked
-out whisper.cpp commit during container builds.
+`WHISPER_ACCELERATION` accepts `cpu` or `cuda`. CUDA releases use the
+`-cuda.tar.gz` asset suffix and include the CUDA runtime libraries required by
+the bundled `whisper.cpp` binary. Set `WHISPER_CPP_COMMIT` to verify the
+checked-out whisper.cpp commit during container builds.
 
 For the RTX 2070 Super, use CUDA architecture `75` and limit build parallelism
 if the machine starts using swap:
@@ -235,6 +250,9 @@ This produces:
 - `dist/release/sttd-<version>-linux-amd64/`
 - `dist/release/sttd-<version>-linux-amd64.tar.gz`
 - `dist/release/sttd-<version>-linux-amd64.tar.gz.sha256`
+
+CUDA builds produce the corresponding `-cuda` directory, archive, and
+checksum. `make publish-release` builds and uploads both assets.
 
 Publish the release to GitHub Releases with an explicit version or bump:
 

@@ -67,8 +67,21 @@ main() {
     exit 1
   fi
 
+  local expected_acceleration=cpu
+  case "$(basename "${ARCHIVE_PATH}")" in
+    *-cuda.tar.gz)
+      expected_acceleration=cuda
+      ;;
+    *.tar.gz)
+      ;;
+    *)
+      printf 'release verification failed: unsupported archive name: %s\n' "${ARCHIVE_PATH}" >&2
+      exit 1
+      ;;
+  esac
+
   print_step 1 3 "verifying the release checksum"
-  (cd "$(dirname "${ARCHIVE_PATH}")" && sha256sum -c "$(basename "${ARCHIVE_PATH}").sha256")
+  (cd "$(dirname "${ARCHIVE_PATH}")" && LC_ALL=C sha256sum -c "$(basename "${ARCHIVE_PATH}").sha256")
 
   print_step 2 3 "extracting and validating release contents"
   TEMP_DIR="$(mktemp -d)"
@@ -91,6 +104,7 @@ main() {
   require_executable "${release_dir}/scripts/listen.sh"
   require_file "${release_dir}/INSTALL.md"
   require_file "${release_dir}/VERSION"
+  require_file "${release_dir}/RUNTIME_ACCELERATION"
   require_file "${release_dir}/profiles/linux.env"
   require_file "${release_dir}/profiles/steam_deck.env"
   require_file "${release_dir}/scripts/lib/model.sh"
@@ -102,17 +116,15 @@ main() {
     exit 1
   fi
   require_executable "${whisper_wrapper}"
-  local cpu_runtime
-  cpu_runtime="$(find "${release_dir}/.sttd/bin/cpu" -maxdepth 1 -type f -name '*.real' -perm -111 2>/dev/null | head -n 1)"
-  if [[ -z "${cpu_runtime}" ]]; then
-    printf 'release verification failed: missing CPU whisper runtime\n' >&2
+  if [[ "$(cat "${release_dir}/RUNTIME_ACCELERATION")" != "${expected_acceleration}" ]]; then
+    printf 'release verification failed: runtime flavor does not match archive name\n' >&2
     exit 1
   fi
-  if [[ -d "${release_dir}/.sttd/bin/cuda" ]]; then
-    find "${release_dir}/.sttd/bin/cuda" -maxdepth 1 -type f -name '*.real' -perm -111 | grep -q . || {
-      printf 'release verification failed: CUDA runtime directory has no executable\n' >&2
-      exit 1
-    }
+  local runtime_binary
+  runtime_binary="$(find "${release_dir}/.sttd/bin/${expected_acceleration}" -maxdepth 1 -type f -name '*.real' -perm -111 2>/dev/null | head -n 1)"
+  if [[ -z "${runtime_binary}" ]]; then
+    printf 'release verification failed: missing %s whisper runtime\n' "${expected_acceleration}" >&2
+    exit 1
   fi
 
   print_step 3 3 "checking packaged scripts and hotkey support"

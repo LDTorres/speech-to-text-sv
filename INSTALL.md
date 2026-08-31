@@ -27,7 +27,17 @@ curl -fsSL https://raw.githubusercontent.com/LDTorres/speech-to-text-sv/main/scr
 
 The bootstrap downloads the latest published release, verifies its SHA-256 checksum, and runs the packaged installer. If you prefer to review the script first, download the file and run it locally. You can also pin a version with `--version v0.1.5`. The installer never requires root privileges.
 
-Download the `sttd-<version>-linux-amd64.tar.gz` archive and its `.sha256` file. Verify the archive first:
+The default download is the CPU-only package. NVIDIA users can request the
+larger CUDA package:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LDTorres/speech-to-text-sv/main/scripts/bootstrap-install.sh \
+  | bash -s -- --interactive --acceleration cuda
+```
+
+The CUDA package requires a compatible NVIDIA driver.
+
+Download the `sttd-<version>-linux-amd64.tar.gz` archive and its `.sha256` file. For CUDA, use the `-cuda.tar.gz` archive instead. Verify the archive first:
 
 ```bash
 sha256sum -c sttd-<version>-linux-amd64.tar.gz.sha256
@@ -38,16 +48,18 @@ cd sttd-<version>-linux-amd64
 Install the general Linux profile:
 
 ```bash
-./install.sh --profile linux --language es --as-service
+./install.sh --profile linux --language es --acceleration auto --as-service
 ```
 
 Install for Steam Deck:
 
 ```bash
-./install.sh --profile steam_deck --language es --as-service
+./install.sh --profile steam_deck --language es --acceleration auto --as-service
 ```
 
 Without flags, `./install.sh` opens an interactive setup that asks for the profile, integration, model, language, service, public command name, and optional Hyprland bindings. For automation, use `--non-interactive` and pass the options explicitly.
+
+The CPU package accepts `--acceleration auto` or `--acceleration cpu`. The CUDA package must be installed with `--acceleration cuda`.
 
 By default, the active installation is stored in `~/.local/opt/sttd`. The systemd service points to this stable location, so upgrades do not break unit paths.
 

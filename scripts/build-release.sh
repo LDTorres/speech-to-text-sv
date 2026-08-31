@@ -11,7 +11,7 @@ TARGET_ARCH="${TARGET_ARCH:-amd64}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-${TARGET_OS}/${TARGET_ARCH}}"
 WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION:-v1.8.4}"
 WHISPER_CPP_COMMIT="${WHISPER_CPP_COMMIT:-9386f239401074690479731c1e41683fbbeac557}"
-WHISPER_ACCELERATION="${WHISPER_ACCELERATION:-auto}"
+WHISPER_ACCELERATION="${WHISPER_ACCELERATION:-cpu}"
 GO_BUILD_TAGS="${GO_BUILD_TAGS:-x11hotkey}"
 RELEASE_VERSION="${RELEASE_VERSION:-}"
 RELEASE_BUMP=""
@@ -116,20 +116,24 @@ resolve_release_version() {
 }
 
 set_release_paths() {
-  RELEASE_DIR="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}"
-  ARCHIVE_PATH="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
+  local flavor_suffix=""
+  if [[ "${WHISPER_ACCELERATION}" == "cuda" ]]; then
+    flavor_suffix="-cuda"
+  fi
+  RELEASE_DIR="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}${flavor_suffix}"
+  ARCHIVE_PATH="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}${flavor_suffix}.tar.gz"
   RUNTIME_BIN_DIR="${RELEASE_DIR}/.sttd/bin"
   PROFILES_DIR="${RELEASE_DIR}/profiles"
 }
 
 stage_whisper_runtime() {
-  local variant variant_dir
+  local variant_dir
 
   case "${WHISPER_ACCELERATION}" in
-    cpu|cuda|auto)
+    cpu|cuda)
       ;;
     *)
-      printf 'unsupported WHISPER_ACCELERATION: %s (expected auto, cpu or cuda)\n' "${WHISPER_ACCELERATION}" >&2
+      printf 'unsupported WHISPER_ACCELERATION: %s (expected cpu or cuda)\n' "${WHISPER_ACCELERATION}" >&2
       exit 1
       ;;
   esac
@@ -141,7 +145,7 @@ stage_whisper_runtime() {
     fi
 
     if [[ "${WHISPER_ACCELERATION}" != "cpu" ]]; then
-      printf 'WHISPER_BINARY_SOURCE_PATH requires WHISPER_ACCELERATION=cpu; use container builds for auto/cuda releases\n' >&2
+      printf 'WHISPER_BINARY_SOURCE_PATH requires WHISPER_ACCELERATION=cpu; use container builds for CUDA releases\n' >&2
       exit 1
     fi
 
@@ -152,20 +156,14 @@ stage_whisper_runtime() {
     return
   fi
 
-  for variant in cpu cuda; do
-    if [[ "${variant}" == "cuda" && "${WHISPER_ACCELERATION}" == "cpu" ]]; then
-      continue
-    fi
+  variant_dir="${RUNTIME_BIN_DIR}/${WHISPER_ACCELERATION}"
+  mkdir -p "${variant_dir}"
+  TARGET_PLATFORM="${TARGET_PLATFORM}" OUTPUT_DIR="${variant_dir}" \
+    WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION}" WHISPER_CPP_COMMIT="${WHISPER_CPP_COMMIT}" \
+    WHISPER_ACCELERATION="${WHISPER_ACCELERATION}" \
+    "${ROOT_DIR}/scripts/build-whisper-cli-container.sh"
 
-    variant_dir="${RUNTIME_BIN_DIR}/${variant}"
-    mkdir -p "${variant_dir}"
-    TARGET_PLATFORM="${TARGET_PLATFORM}" OUTPUT_DIR="${variant_dir}" \
-      WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION}" WHISPER_CPP_COMMIT="${WHISPER_CPP_COMMIT}" \
-      WHISPER_ACCELERATION="${variant}" \
-      "${ROOT_DIR}/scripts/build-whisper-cli-container.sh"
-
-    mv "${variant_dir}/${WHISPER_BINARY_NAME}" "${variant_dir}/${WHISPER_BINARY_REAL_NAME}"
-  done
+  mv "${variant_dir}/${WHISPER_BINARY_NAME}" "${variant_dir}/${WHISPER_BINARY_REAL_NAME}"
 }
 
 build_go_binary() {
@@ -288,6 +286,7 @@ stage_release_files() {
   cp "${ROOT_DIR}/LICENSE" "${RELEASE_DIR}/LICENSE"
   cp "${ROOT_DIR}/INSTALL.md" "${RELEASE_DIR}/INSTALL.md"
   printf '%s\n' "${RELEASE_VERSION}" > "${RELEASE_DIR}/VERSION"
+  printf '%s\n' "${WHISPER_ACCELERATION}" > "${RELEASE_DIR}/RUNTIME_ACCELERATION"
 }
 
 package_release() {
@@ -295,7 +294,7 @@ package_release() {
   tar -czf "${ARCHIVE_PATH}" -C "$(dirname "${RELEASE_DIR}")" "$(basename "${RELEASE_DIR}")"
   (
     cd "$(dirname "${ARCHIVE_PATH}")"
-    sha256sum "$(basename "${ARCHIVE_PATH}")" > "$(basename "${ARCHIVE_PATH}").sha256"
+    LC_ALL=C sha256sum "$(basename "${ARCHIVE_PATH}")" > "$(basename "${ARCHIVE_PATH}").sha256"
   )
 }
 

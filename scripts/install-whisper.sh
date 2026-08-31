@@ -33,6 +33,8 @@ LANGUAGE_EXPLICIT=false
 AS_SERVICE_EXPLICIT=false
 MODEL_NAME="${STTD_DEFAULT_MODEL}"
 MODEL_EXPLICIT=false
+ACCELERATION_NAME="${STTD_TRANSCRIBE_ACCELERATION:-auto}"
+ACCELERATION_EXPLICIT=false
 LANGUAGE_NAME="${STTD_TRANSCRIBE_LANGUAGE:-es}"
 COMMAND_NAME="${STTD_PUBLIC_COMMAND_NAME:-listen}"
 COMMAND_NAME_EXPLICIT=false
@@ -53,6 +55,7 @@ WHISPER_MODEL_DIR=""
 WHISPER_BINARY_NAME=""
 WHISPER_BINARY_PATH=""
 WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION:-v1.8.4}"
+PACKAGE_ACCELERATION="cpu"
 
 print_step() {
   printf '\n==> [%s/%s] %s\n' "$1" "$2" "$3"
@@ -71,6 +74,12 @@ set_runtime_paths() {
   WHISPER_MODEL_DIR="${ROOT_DIR}/.sttd/models"
   WHISPER_BINARY_NAME="whisper-cli-${WHISPER_CPP_VERSION}"
   WHISPER_BINARY_PATH="${WHISPER_BIN_DIR}/${WHISPER_BINARY_NAME}"
+  PACKAGE_ACCELERATION="cpu"
+  if [[ -f "${ROOT_DIR}/RUNTIME_ACCELERATION" ]]; then
+    PACKAGE_ACCELERATION="$(awk 'NF { print; exit }' "${ROOT_DIR}/RUNTIME_ACCELERATION")"
+  elif [[ -d "${WHISPER_BIN_DIR}/cuda" ]]; then
+    PACKAGE_ACCELERATION="auto"
+  fi
 }
 
 set_runtime_paths "${SOURCE_ROOT}"
@@ -83,6 +92,7 @@ options:
   --profile <linux|steam_deck>       runtime profile (default: linux)
   --integration <none|hyprland>      optional desktop integration
   --model <tiny|base|small|large>    model to download (default: base)
+  --acceleration <auto|cpu|cuda>     whisper runtime to use (default: auto)
   --language <code>                  transcription language (default: es)
   --as-service                       install and start a systemd --user service
   --interactive                      ask setup questions before installing
@@ -123,6 +133,12 @@ parse_args() {
         [[ $# -ge 2 ]] || { printf 'missing value for --model\n' >&2; exit 1; }
         MODEL_NAME="$2"
         MODEL_EXPLICIT=true
+        shift 2
+        ;;
+      --acceleration)
+        [[ $# -ge 2 ]] || { printf 'missing value for --acceleration\n' >&2; exit 1; }
+        ACCELERATION_NAME="$2"
+        ACCELERATION_EXPLICIT=true
         shift 2
         ;;
       --language)
@@ -196,6 +212,13 @@ parse_args() {
 
   preserve_existing_settings
   configure_interactive_defaults
+  if [[ "${ACCELERATION_EXPLICIT}" != "true" ]]; then
+    if [[ "${PACKAGE_ACCELERATION}" == "cuda" ]]; then
+      ACCELERATION_NAME=cuda
+    elif [[ "${PACKAGE_ACCELERATION}" == "cpu" && "${ACCELERATION_NAME}" == "cuda" ]]; then
+      ACCELERATION_NAME=auto
+    fi
+  fi
 
   case "${PROFILE_NAME}" in
     linux|steam_deck)
@@ -223,6 +246,38 @@ parse_args() {
   fi
 
   sttd_require_valid_model "${MODEL_NAME}"
+  case "${ACCELERATION_NAME}" in
+    auto|cpu|cuda)
+      ;;
+    *)
+      printf 'unsupported acceleration: %s (expected auto, cpu or cuda)\n' "${ACCELERATION_NAME}" >&2
+      exit 1
+      ;;
+  esac
+  case "${PACKAGE_ACCELERATION}" in
+    cpu)
+      if [[ "${ACCELERATION_NAME}" == "cuda" ]]; then
+        printf 'CUDA acceleration requires the CUDA release archive; use the bootstrap with --acceleration cuda\n' >&2
+        exit 1
+      fi
+      ;;
+    auto)
+      if [[ "${ACCELERATION_NAME}" == "cuda" && ! -d "${WHISPER_BIN_DIR}/cuda" ]]; then
+        printf 'CUDA acceleration requires a CUDA runtime in the release archive\n' >&2
+        exit 1
+      fi
+      ;;
+    cuda)
+      if [[ "${ACCELERATION_NAME}" != "cuda" ]]; then
+        printf 'the CUDA release archive requires --acceleration cuda\n' >&2
+        exit 1
+      fi
+      ;;
+    *)
+      printf 'invalid release runtime metadata: %s\n' "${PACKAGE_ACCELERATION}" >&2
+      exit 1
+      ;;
+  esac
   case "${HYPRLAND_BINDINGS}" in
     ''|yes|no|true|false)
       ;;
@@ -276,6 +331,8 @@ preserve_existing_settings() {
   [[ "${INTEGRATION_EXPLICIT}" == "true" || -z "${value}" ]] || INTEGRATION_NAME="${value}"
   value="$(existing_install_value STTD_TRANSCRIBE_LANGUAGE)"
   [[ "${LANGUAGE_EXPLICIT}" == "true" || -z "${value}" ]] || LANGUAGE_NAME="${value}"
+  value="$(existing_install_value STTD_TRANSCRIBE_ACCELERATION)"
+  [[ "${ACCELERATION_EXPLICIT}" == "true" || -z "${value}" ]] || ACCELERATION_NAME="${value}"
   value="$(existing_install_value STTD_PUBLIC_COMMAND_NAME)"
   [[ "${COMMAND_NAME_EXPLICIT}" == "true" || -z "${value}" ]] || COMMAND_NAME="${value}"
   value="$(existing_install_value STTD_HYPRLAND_CONFIG_PATH)"
@@ -322,6 +379,9 @@ configure_interactive_defaults() {
     MODEL_NAME="$(sttd_prompt_for_model "${configured_model_name:-${MODEL_NAME}}")"
     MODEL_EXPLICIT=true
   fi
+  if [[ "${ACCELERATION_EXPLICIT}" != "true" && "${PACKAGE_ACCELERATION}" == "cuda" ]]; then
+    ACCELERATION_NAME=cuda
+  fi
   if [[ "${LANGUAGE_EXPLICIT}" != "true" ]]; then
     LANGUAGE_NAME="$(prompt_value 'Transcription language' "${configured_language:-${LANGUAGE_NAME}}")"
   fi
@@ -362,7 +422,7 @@ profile_template_path() {
 }
 
 ensure_release_layout() {
-  local cpu_runtime
+  local runtime_binary
 
   if [[ ! -x "${ROOT_DIR}/sttd" || ! -x "${ROOT_DIR}/sttdctl" ]]; then
     printf 'release layout is incomplete; expected sttd and sttdctl under %s\n' "${ROOT_DIR}" >&2
@@ -372,9 +432,16 @@ ensure_release_layout() {
     printf 'release layout is incomplete; expected whisper wrapper under %s\n' "${WHISPER_BIN_DIR}" >&2
     exit 1
   fi
-  cpu_runtime="$(find "${WHISPER_BIN_DIR}/cpu" -maxdepth 1 -type f -name '*.real' -perm /111 -print -quit 2>/dev/null)"
-  if [[ -z "${cpu_runtime}" ]]; then
-    printf 'release layout is incomplete; expected CPU whisper runtime under %s/cpu\n' "${WHISPER_BIN_DIR}" >&2
+  case "${ACCELERATION_NAME}" in
+    auto|cpu)
+      runtime_binary="$(find "${WHISPER_BIN_DIR}/cpu" -maxdepth 1 -type f -name '*.real' -perm /111 -print -quit 2>/dev/null)"
+      ;;
+    cuda)
+      runtime_binary="$(find "${WHISPER_BIN_DIR}/cuda" -maxdepth 1 -type f -name '*.real' -perm /111 -print -quit 2>/dev/null)"
+      ;;
+  esac
+  if [[ -z "${runtime_binary}" ]]; then
+    printf 'release layout is incomplete; expected %s whisper runtime under %s/%s\n' "${ACCELERATION_NAME}" "${WHISPER_BIN_DIR}" "${ACCELERATION_NAME}" >&2
     exit 1
   fi
   if [[ ! -f "$(profile_template_path)" ]]; then
@@ -459,6 +526,7 @@ confirm_setup_summary() {
   printf '  profile: %s\n' "${PROFILE_NAME}" >&2
   printf '  integration: %s\n' "${INTEGRATION_NAME:-none}" >&2
   printf '  model: %s (%s)\n' "${MODEL_NAME}" "$(sttd_model_display_size "${MODEL_NAME}")" >&2
+  printf '  acceleration: %s\n' "${ACCELERATION_NAME}" >&2
   printf '  language: %s\n' "${LANGUAGE_NAME}" >&2
   printf '  systemd user service: %s\n' "${AS_SERVICE}" >&2
   printf '  public command: %s\n' "${COMMAND_NAME}" >&2
@@ -501,7 +569,12 @@ activate_installation() {
   staging_dir="$(mktemp -d "${install_parent}/.sttd-install.XXXXXX")"
   previous_dir="${INSTALL_DIR}.previous"
 
-  cp -a "${SOURCE_ROOT}/." "${staging_dir}/"
+  printf 'copying release files into the stable installation; CUDA packages may take a few minutes\n'
+  if ! cp -a "${SOURCE_ROOT}/." "${staging_dir}/"; then
+    printf 'unable to copy release files into the staging directory: %s\n' "${staging_dir}" >&2
+    rm -rf "${staging_dir}"
+    return 1
+  fi
   copy_existing_state "${staging_dir}"
 
   if [[ -e "${previous_dir}" ]]; then
@@ -566,6 +639,7 @@ configure_env_file() {
   sttd_set_env_value "${ENV_FILE}" "STTD_PLATFORM_INTEGRATION" "${INTEGRATION_NAME}"
   sttd_set_env_value "${ENV_FILE}" "STTD_EXTERNAL_CONTROL_ENABLED" "${external_control}"
   sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_BINARY_PATH" "${WHISPER_BINARY_PATH}"
+  sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_ACCELERATION" "${ACCELERATION_NAME}"
   sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_MODEL_PATH" "${STTD_MODEL_PATH}"
   sttd_set_env_value "${ENV_FILE}" "STTD_TRANSCRIBE_LANGUAGE" "${LANGUAGE_NAME}"
   sttd_set_env_value "${ENV_FILE}" "STTD_MODEL_REVISION" "${STTD_MODEL_REVISION}"
@@ -703,6 +777,7 @@ main() {
   ensure_release_layout
 
   print_step 3 5 "creating and configuring the ${PROFILE_NAME} profile"
+  printf 'loading the release profile and preserving existing settings\n'
   ensure_env_file
   select_model
   sttd_load_model_source_config "${ENV_FILE}"

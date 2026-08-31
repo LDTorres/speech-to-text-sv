@@ -7,6 +7,7 @@ VERSION=""
 FORWARD_ARGS=()
 TEMP_DIR=""
 NON_INTERACTIVE=false
+ACCELERATION="auto"
 
 usage() {
   cat <<'EOF'
@@ -15,6 +16,7 @@ usage: curl -fsSL https://raw.githubusercontent.com/LDTorres/speech-to-text-sv/m
 options:
   --version <tag>       release tag, for example v0.1.5
   --repo <owner/name>   GitHub repository override
+  --acceleration <mode> runtime to install: auto, cpu or cuda
   --interactive         use the guided installer
   --non-interactive     install using defaults and supplied options
   --help                show this help
@@ -38,6 +40,12 @@ parse_args() {
       --repo)
         [[ $# -ge 2 ]] || { printf 'missing value for --repo\n' >&2; exit 2; }
         REPOSITORY="$2"
+        shift 2
+        ;;
+      --acceleration)
+        [[ $# -ge 2 ]] || { printf 'missing value for --acceleration\n' >&2; exit 2; }
+        ACCELERATION="$2"
+        FORWARD_ARGS+=("$1" "$2")
         shift 2
         ;;
       --non-interactive)
@@ -94,6 +102,14 @@ main() {
     printf '--version is required with --non-interactive\n' >&2
     exit 2
   fi
+  case "${ACCELERATION}" in
+    auto|cpu|cuda)
+      ;;
+    *)
+      printf 'unsupported acceleration: %s (expected auto, cpu or cuda)\n' "${ACCELERATION}" >&2
+      exit 2
+      ;;
+  esac
   if [[ -z "${VERSION}" ]]; then
     resolve_latest_version
   fi
@@ -106,7 +122,11 @@ main() {
     exit 2
   fi
 
-  local archive_name="sttd-${VERSION}-linux-amd64.tar.gz"
+  local flavor_suffix=""
+  if [[ "${ACCELERATION}" == "cuda" ]]; then
+    flavor_suffix="-cuda"
+  fi
+  local archive_name="sttd-${VERSION}-linux-amd64${flavor_suffix}.tar.gz"
   local base_url="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
   TEMP_DIR="$(mktemp -d)"
   trap cleanup EXIT
@@ -125,7 +145,7 @@ main() {
   printf 'downloading %s from %s\n' "${archive_name}" "${REPOSITORY}"
   curl --fail --location --show-error --retry 3 "${base_url}/${archive_name}" -o "${TEMP_DIR}/${archive_name}"
   curl --fail --location --show-error --retry 3 "${base_url}/${archive_name}.sha256" -o "${TEMP_DIR}/${archive_name}.sha256"
-  (cd "${TEMP_DIR}" && sha256sum -c "${archive_name}.sha256")
+  (cd "${TEMP_DIR}" && LC_ALL=C sha256sum -c "${archive_name}.sha256")
   tar -xzf "${TEMP_DIR}/${archive_name}" -C "${TEMP_DIR}"
 
   local release_dir

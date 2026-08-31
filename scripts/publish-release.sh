@@ -13,6 +13,8 @@ RELEASE_BUMP=""
 RELEASE_TITLE="${RELEASE_TITLE:-}"
 ARCHIVE_PATH=""
 CHECKSUM_PATH=""
+CUDA_ARCHIVE_PATH=""
+CUDA_CHECKSUM_PATH=""
 TARGET_REF="${TARGET_REF:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
 RELEASE_REPO="${RELEASE_REPO:-}"
 NOTES_FILE=""
@@ -140,27 +142,32 @@ parse_args() {
 
   ARCHIVE_PATH="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
   CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
+  CUDA_ARCHIVE_PATH="${ROOT_DIR}/dist/release/sttd-${RELEASE_VERSION}-${TARGET_OS}-${TARGET_ARCH}-cuda.tar.gz"
+  CUDA_CHECKSUM_PATH="${CUDA_ARCHIVE_PATH}.sha256"
   if [[ -z "${RELEASE_TITLE}" ]]; then
     RELEASE_TITLE="${RELEASE_VERSION}"
   fi
 }
 
 ensure_archive() {
-  if [[ -f "${ARCHIVE_PATH}" && -f "${CHECKSUM_PATH}" ]]; then
+  if [[ -f "${ARCHIVE_PATH}" && -f "${CHECKSUM_PATH}" && \
+    -f "${CUDA_ARCHIVE_PATH}" && -f "${CUDA_CHECKSUM_PATH}" ]]; then
     return
   fi
 
   if [[ "${SKIP_BUILD}" == "true" ]]; then
-    printf 'release archive not found: %s\n' "${ARCHIVE_PATH}" >&2
+    printf 'release archives not found; expected:\n  %s\n  %s\n' "${ARCHIVE_PATH}" "${CUDA_ARCHIVE_PATH}" >&2
     exit 1
   fi
 
-  printf 'release archive missing, running build-release...\n'
+  printf 'release archives missing, building CPU and CUDA variants...\n'
   TARGET_OS="${TARGET_OS}" TARGET_ARCH="${TARGET_ARCH}" RELEASE_VERSION="${RELEASE_VERSION}" \
-    "${ROOT_DIR}/scripts/build-release.sh"
+    WHISPER_ACCELERATION=cpu "${ROOT_DIR}/scripts/build-release.sh"
+  TARGET_OS="${TARGET_OS}" TARGET_ARCH="${TARGET_ARCH}" RELEASE_VERSION="${RELEASE_VERSION}" \
+    WHISPER_ACCELERATION=cuda "${ROOT_DIR}/scripts/build-release.sh"
 
-  if [[ ! -f "${CHECKSUM_PATH}" ]]; then
-    printf 'release checksum not found after build: %s\n' "${CHECKSUM_PATH}" >&2
+  if [[ ! -f "${CHECKSUM_PATH}" || ! -f "${CUDA_CHECKSUM_PATH}" ]]; then
+    printf 'release checksum missing after build\n' >&2
     exit 1
   fi
 }
@@ -198,7 +205,9 @@ resolve_release_repo() {
 
 create_release() {
   local args=(
-    release create "${RELEASE_VERSION}" "${ARCHIVE_PATH}" "${CHECKSUM_PATH}"
+    release create "${RELEASE_VERSION}" \
+      "${ARCHIVE_PATH}" "${CHECKSUM_PATH}" \
+      "${CUDA_ARCHIVE_PATH}" "${CUDA_CHECKSUM_PATH}"
     --repo "${RELEASE_REPO}"
     --target "${TARGET_REF}"
     --title "${RELEASE_TITLE}"
@@ -242,6 +251,8 @@ update_release() {
 
   if [[ "${DRAFT}" == "true" ]]; then
     edit_args+=(--draft=true)
+  else
+    edit_args+=(--draft=false)
   fi
   if [[ "${PRERELEASE}" == "true" ]]; then
     edit_args+=(--prerelease)
@@ -251,7 +262,10 @@ update_release() {
   fi
 
   gh "${edit_args[@]}"
-  gh release upload "${RELEASE_VERSION}" "${ARCHIVE_PATH}" "${CHECKSUM_PATH}" --repo "${RELEASE_REPO}" --clobber
+  gh release upload "${RELEASE_VERSION}" \
+    "${ARCHIVE_PATH}" "${CHECKSUM_PATH}" \
+    "${CUDA_ARCHIVE_PATH}" "${CUDA_CHECKSUM_PATH}" \
+    --repo "${RELEASE_REPO}" --clobber
 }
 
 main() {
@@ -278,6 +292,7 @@ main() {
   print_step 4 4 "confirming published release assets"
   printf 'published release: %s\n' "${RELEASE_VERSION}"
   printf 'asset: %s\n' "${ARCHIVE_PATH}"
+  printf 'asset: %s\n' "${CUDA_ARCHIVE_PATH}"
 }
 
 main "$@"

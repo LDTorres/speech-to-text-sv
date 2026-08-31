@@ -260,19 +260,28 @@ sttd_load_model_source_config() {
         fi
         ;;
       STTD_MODEL_SHA256_TINY)
-        [[ -n "${value}" ]] && STTD_MODEL_SHA256_TINY="${value}"
+        if [[ -n "${value}" ]]; then
+          STTD_MODEL_SHA256_TINY="${value}"
+        fi
         ;;
       STTD_MODEL_SHA256_BASE)
-        [[ -n "${value}" ]] && STTD_MODEL_SHA256_BASE="${value}"
+        if [[ -n "${value}" ]]; then
+          STTD_MODEL_SHA256_BASE="${value}"
+        fi
         ;;
       STTD_MODEL_SHA256_SMALL)
-        [[ -n "${value}" ]] && STTD_MODEL_SHA256_SMALL="${value}"
+        if [[ -n "${value}" ]]; then
+          STTD_MODEL_SHA256_SMALL="${value}"
+        fi
         ;;
       STTD_MODEL_SHA256_LARGE)
-        [[ -n "${value}" ]] && STTD_MODEL_SHA256_LARGE="${value}"
+        if [[ -n "${value}" ]]; then
+          STTD_MODEL_SHA256_LARGE="${value}"
+        fi
         ;;
     esac
   done < "${env_file}"
+  return 0
 }
 
 sttd_verify_model_checksum() {
@@ -285,9 +294,9 @@ sttd_verify_model_checksum() {
   fi
 
   if command -v sha256sum >/dev/null 2>&1; then
-    actual_checksum="$(sha256sum "${model_path}" | awk '{print $1}')"
+    actual_checksum="$(LC_ALL=C sha256sum "${model_path}" | awk '{print $1}')"
   elif command -v shasum >/dev/null 2>&1; then
-    actual_checksum="$(shasum -a 256 "${model_path}" | awk '{print $1}')"
+    actual_checksum="$(LC_ALL=C shasum -a 256 "${model_path}" | awk '{print $1}')"
   else
     printf 'cannot validate model checksum: install sha256sum or shasum\n' >&2
     return 1

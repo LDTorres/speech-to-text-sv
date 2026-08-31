@@ -77,6 +77,7 @@ create_release() {
   printf 'model-small\n' > "${release_dir}/.sttd/models/ggml-small.bin"
   printf 'model-tiny\n' > "${release_dir}/.sttd/models/ggml-tiny.bin"
   printf '%s\n' "${marker}" > "${release_dir}/VERSION"
+  printf 'cpu\n' > "${release_dir}/RUNTIME_ACCELERATION"
 
   cp "${ROOT_DIR}/scripts/install-whisper.sh" "${release_dir}/install.sh"
   cp "${ROOT_DIR}/scripts/change-model.sh" "${release_dir}/change-model.sh"

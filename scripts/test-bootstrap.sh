@@ -30,6 +30,8 @@ EOF
   chmod +x "${release_dir}/install.sh"
   tar -czf "${FIXTURE_DIR}/${archive_name}" -C "${TEST_DIR}" "sttd-v0.0.0-linux-amd64"
   (cd "${FIXTURE_DIR}" && sha256sum "${archive_name}" > "${archive_name}.sha256")
+  cp "${FIXTURE_DIR}/${archive_name}" "${FIXTURE_DIR}/sttd-v0.0.0-linux-amd64-cuda.tar.gz"
+  (cd "${FIXTURE_DIR}" && sha256sum sttd-v0.0.0-linux-amd64-cuda.tar.gz > sttd-v0.0.0-linux-amd64-cuda.tar.gz.sha256)
 }
 
 create_fake_curl() {
@@ -69,6 +71,13 @@ main() {
 
   [[ -f "${RESULT_FILE}" ]] || fail 'verified installer was not executed'
   grep -Fq -- '--non-interactive --profile linux' "${RESULT_FILE}" || fail 'installer arguments were not forwarded'
+
+  HOME="${TEST_DIR}/home" PATH="${TEST_BIN}:${PATH}" \
+    STTD_BOOTSTRAP_FIXTURE_DIR="${FIXTURE_DIR}" \
+    STTD_BOOTSTRAP_RESULT="${RESULT_FILE}" \
+    "${ROOT_DIR}/scripts/bootstrap-install.sh" --non-interactive --version v0.0.0 --repo owner/repo --acceleration cuda
+
+  grep -Fq -- '--acceleration cuda' "${RESULT_FILE}" || fail 'CUDA archive or installer option was not selected'
 
   printf 'invalid checksum\n' > "${FIXTURE_DIR}/sttd-v0.0.0-linux-amd64.tar.gz.sha256"
   if HOME="${TEST_DIR}/home" PATH="${TEST_BIN}:${PATH}" \

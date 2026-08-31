@@ -84,7 +84,13 @@ main() {
       install -Dm755 /opt/whisper.cpp/build/bin/whisper-cli /out/whisper-cli-'"${WHISPER_CPP_VERSION}"'
       find /opt/whisper.cpp/build \( -type f -o -type l \) -name "*.so*" -exec sh -c '"'"'
         for lib_path do
-          install -Dm755 "$lib_path" "/out/$(basename "$lib_path")"
+          output_path="/out/$(basename "$lib_path")"
+          rm -f "$output_path"
+          if [ -L "$lib_path" ]; then
+            ln -s "$(readlink "$lib_path")" "$output_path"
+          else
+            install -Dm755 "$lib_path" "$output_path"
+          fi
         done
       '"'"' sh {} +
 

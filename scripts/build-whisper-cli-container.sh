@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCKERFILE_PATH="${ROOT_DIR}/docker/whisper-cli.ubuntu.Dockerfile"
 
 WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION:-v1.8.4}"
+WHISPER_CPP_COMMIT="${WHISPER_CPP_COMMIT:-9386f239401074690479731c1e41683fbbeac557}"
 WHISPER_ACCELERATION="${WHISPER_ACCELERATION:-cpu}"
 WHISPER_CUDA_ARCHITECTURES="${WHISPER_CUDA_ARCHITECTURES:-}"
 WHISPER_BUILD_JOBS="${WHISPER_BUILD_JOBS:-2}"
@@ -14,6 +15,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/dist/whisper/linux-amd64}"
 OUTPUT_BINARY_PATH="${OUTPUT_DIR}/whisper-cli-${WHISPER_CPP_VERSION}"
 HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
+CONTAINER_USER_ARGS=(--user "${HOST_UID}:${HOST_GID}")
 
 case "${WHISPER_ACCELERATION}" in
   cpu)
@@ -37,8 +39,22 @@ need_cmd() {
   fi
 }
 
+configure_container_user() {
+  local docker_path real_path
+  docker_path="$(command -v docker)"
+  real_path="$(readlink -f "${docker_path}" 2>/dev/null || printf '%s' "${docker_path}")"
+
+  # Rootless Podman maps container root to the invoking host user. Passing the
+  # host UID again creates a subuid mapping and makes bind-mounted outputs
+  # unwritable. Keep --user for a regular Docker daemon.
+  if [[ "$(basename "${real_path}")" == "podman" ]]; then
+    CONTAINER_USER_ARGS=()
+  fi
+}
+
 main() {
   need_cmd docker
+  configure_container_user
 
   mkdir -p "${OUTPUT_DIR}"
 
@@ -47,6 +63,7 @@ main() {
     --platform "${TARGET_PLATFORM}" \
     --build-arg "BASE_IMAGE=${WHISPER_BASE_IMAGE}" \
     --build-arg "WHISPER_CPP_VERSION=${WHISPER_CPP_VERSION}" \
+    --build-arg "WHISPER_CPP_COMMIT=${WHISPER_CPP_COMMIT}" \
     --build-arg "WHISPER_ACCELERATION=${WHISPER_ACCELERATION}" \
     --build-arg "WHISPER_CUDA_ARCHITECTURES=${WHISPER_CUDA_ARCHITECTURES}" \
     --build-arg "WHISPER_BUILD_JOBS=${WHISPER_BUILD_JOBS}" \
@@ -58,7 +75,7 @@ main() {
   docker run \
     --rm \
     --platform "${TARGET_PLATFORM}" \
-    --user "${HOST_UID}:${HOST_GID}" \
+    "${CONTAINER_USER_ARGS[@]}" \
     --env "WHISPER_ACCELERATION=${WHISPER_ACCELERATION}" \
     --volume "${OUTPUT_DIR}:/out" \
     "${IMAGE_TAG}" \

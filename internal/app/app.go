@@ -64,6 +64,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.shutdownTimeout)
 		defer cancel()
 
+		if d.sessionService.Status(shutdownCtx).State == session.StateRecording {
+			if err := d.sessionService.StopRecordingAndProcess(shutdownCtx); err != nil {
+				d.logger.Error("stop active recording during shutdown", zap.Error(err))
+			}
+		}
+
 		if triggerStarted {
 			if err := d.triggerWatcher.Stop(shutdownCtx); err != nil && !errors.Is(err, trigger.ErrWatcherNotStarted) {
 				d.logger.Error("stop trigger watcher", zap.Error(err))
@@ -94,14 +100,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.logger.Info("daemon stopping")
 			return nil
 		case event, ok := <-triggerEvents:
-			if triggerEvents == nil {
-				continue
-			}
 			if !ok {
 				if controlStarted {
 					d.logger.Warn("trigger event stream closed; continuing with external control only")
 					triggerEvents = nil
-					triggerStarted = false
 					continue
 				}
 				return errors.New("trigger event stream closed")

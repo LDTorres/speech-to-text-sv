@@ -38,6 +38,30 @@ func TestConfigLoad_InvalidClipboardTimeout_ReturnsError(t *testing.T) {
 	require.EqualError(t, err, "invalid configuration: clipboard timeout must be greater than zero")
 }
 
+func TestConfigLoad_RejectsRelativeAudioFileName(t *testing.T) {
+	t.Setenv("STTD_AUDIO_FILE_NAME", "../recording.wav")
+
+	_, err := Load()
+
+	require.EqualError(t, err, "invalid configuration: audio file name must be a simple file name")
+}
+
+func TestConfigLoad_RejectsRelativeSocketPath(t *testing.T) {
+	t.Setenv("STTD_EXTERNAL_CONTROL_SOCKET_PATH", "control.sock")
+
+	_, err := Load()
+
+	require.EqualError(t, err, "invalid configuration: external control socket path must be absolute")
+}
+
+func TestConfigLoad_InvalidCameraWakeMode_ReturnsError(t *testing.T) {
+	t.Setenv("STTD_AUDIO_CAMERA_WAKE", "always")
+
+	_, err := Load()
+
+	require.EqualError(t, err, `invalid configuration: unsupported audio camera wake mode "always"`)
+}
+
 func TestConfigLoad_InvalidPlatformProfile_ReturnsError(t *testing.T) {
 	t.Setenv("STTD_PLATFORM_PROFILE", "wrong")
 
@@ -103,6 +127,7 @@ func TestResolvePlatform_Linux_UsesRealDesktopDefaults(t *testing.T) {
 	require.Equal(t, []string{"ctrl", "shift"}, resolved.Trigger.Hotkey.Modifiers)
 	require.Equal(t, "space", resolved.Trigger.Hotkey.Key)
 	require.Equal(t, AudioBackendPWRecord, resolved.Audio.Backend)
+	require.Equal(t, AudioWakeAuto, resolved.Audio.CameraWake)
 	require.False(t, resolved.ExternalControl.Enabled)
 	require.Equal(t, "linux", resolved.Clipboard.TargetOS)
 	require.Equal(t, "wl-copy", resolved.Clipboard.PreferredCopy)
@@ -121,6 +146,7 @@ func TestResolvePlatform_SteamDeck_UsesHotkeyToggleDefaults(t *testing.T) {
 	require.Equal(t, []string{}, resolved.Trigger.Hotkey.Modifiers)
 	require.Equal(t, "f12", resolved.Trigger.Hotkey.Key)
 	require.Equal(t, AudioBackendPWRecord, resolved.Audio.Backend)
+	require.Equal(t, AudioWakeAuto, resolved.Audio.CameraWake)
 	require.True(t, resolved.ExternalControl.Enabled)
 	require.Equal(t, "linux", resolved.Clipboard.TargetOS)
 	require.Equal(t, "wl-copy", resolved.Clipboard.PreferredCopy)

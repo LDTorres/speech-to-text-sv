@@ -61,6 +61,8 @@ Relevant defaults by profile:
 
 - `docker` for local `dev-setup` of the `whisper.cpp` runtime
 - `pw-record` for audio capture
+- `mpv` for automatic wake-up of composite USB webcam microphones (optional;
+  only used when the resolver finds a related video node)
 - clipboard/input tooling depending on session type:
   - X11: `xclip` and `xdotool`
   - Wayland: `wl-copy` and `wtype`
@@ -72,6 +74,35 @@ host. The target machine still needs a working NVIDIA driver compatible with
 the bundled CUDA runtime. CPU remains the default build mode.
 
 ## Quick start
+
+### End-user installation
+
+Install the latest published Linux release with the guided setup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LDTorres/speech-to-text-sv/main/scripts/bootstrap-install.sh | bash -s -- --interactive
+```
+
+The bootstrap downloads the versioned archive, verifies its SHA-256 checksum,
+and runs the packaged installer. Pin a release with `--version v0.1.5`; use
+`--non-interactive` for automation. Review the bootstrap script before piping
+it to a shell if your environment requires a stricter supply-chain policy.
+
+The installer creates the memorable `listen` command in `~/.local/bin`:
+
+```bash
+listen status
+listen record start
+listen record stop
+listen model
+listen doctor
+listen uninstall
+```
+
+The technical catalog is also available with
+`~/.local/opt/sttd/sttdctl model list --json`.
+
+Use `--command-name <name>` during installation if `listen` is already in use.
 
 ### Local development
 
@@ -128,13 +159,19 @@ Non-interactive:
 make change-model MODEL=tiny
 make change-model MODEL=base
 make change-model MODEL=small
+make change-model MODEL=large
 ```
 
 Current supported model catalog:
 
-- `tiny`
-- `base`
-- `small`
+| Model | Approximate weight | Resource profile |
+| --- | ---: | --- |
+| `tiny` | 75 MB | lowest resource use |
+| `base` | 142 MB | balanced default |
+| `small` | 466 MB | moderate resource use |
+| `large` | 3.1 GB | highest accuracy and memory use |
+
+`large` downloads Whisper Large v3 (`ggml-large-v3.bin`), approximately 3.1 GB.
 
 Model changes:
 
@@ -160,16 +197,24 @@ Official releases currently target `linux/amd64` and are built with the
 `x11hotkey` build tag. On Wayland/Hyprland, use external control and desktop
 bindings instead of relying on an X11 global hotkey.
 
-The release defaults to a CPU `whisper.cpp` runtime. To build the Linux
-release with CUDA acceleration:
+The release defaults to automatic acceleration selection. It packages a CPU
+runtime and, unless explicitly building CPU-only, a CUDA runtime. At runtime
+the wrapper selects CUDA when a usable NVIDIA driver/GPU is detected and
+otherwise uses CPU. You can force the behavior with
+`STTD_TRANSCRIBE_ACCELERATION=auto|cpu|cuda`.
+
+To build the Linux release with automatic selection and CUDA support:
 
 ```bash
 WHISPER_ACCELERATION=cuda make build-release
 ```
 
-`WHISPER_ACCELERATION` accepts `cpu` or `cuda`. It is a build-time choice; the
-selected runtime is bundled into the release and the wrapper adds its local
-libraries to `LD_LIBRARY_PATH`.
+`WHISPER_ACCELERATION` accepts `auto`, `cpu` or `cuda`. `cpu` builds a smaller
+CPU-only release. `auto` and `cuda` package both runtimes so the installed
+release can fall back to CPU on machines without NVIDIA support. The CUDA
+runtime is built in the container and the wrapper adds the selected runtime's
+libraries to `LD_LIBRARY_PATH`. Set `WHISPER_CPP_COMMIT` to verify the checked
+out whisper.cpp commit during container builds.
 
 For the RTX 2070 Super, use CUDA architecture `75` and limit build parallelism
 if the machine starts using swap:
@@ -246,7 +291,10 @@ Release layout:
 - `install.sh`
 - `change-model.sh`
 - `uninstall.sh`
+- `rollback.sh`
 - `doctor.sh`
+- `scripts/listen.sh`
+- `scripts/lib/hyprland.sh`
 - `INSTALL.md`
 - `VERSION`
 - `profiles/`
@@ -274,6 +322,18 @@ The installer copies the active release to `~/.local/opt/sttd`. Re-running
 `install.sh` from a newer extracted release updates that stable location while
 preserving the existing configuration and downloaded models.
 
+To roll back the most recent update:
+
+```bash
+~/.local/opt/sttd/rollback.sh
+```
+
+The rollback swaps the active installation with `~/.local/opt/sttd.previous`
+and restarts the user service when it is active.
+
+Use `~/.local/opt/sttd/sttdctl doctor` for a complete installation status,
+including version, profile, model, service and external control socket.
+
 On Hyprland, enable the optional Wayland integration. It uses a user-only Unix
 socket and lets Hyprland bindings control the daemon without an X11 hotkey:
 
@@ -295,8 +355,16 @@ For toggle mode, configure `STTD_TRIGGER_MODE=toggle` and use one binding:
 bind = $mainMod, D, exec, /home/TU_USUARIO/.local/opt/sttd/sttdctl control toggle
 ```
 
-The binding and socket path remain configurable; the installer does not edit
-Hyprland configuration automatically.
+The installer can optionally add a managed hold/release block to Hyprland:
+
+```bash
+./install.sh --profile linux --integration hyprland --as-service \
+  --hyprland-bindings yes
+```
+
+It proposes `$mainMod ALT, SPACE`, detects the selected binding, and offers
+two alternatives or a custom combination. The managed block is marked with
+`# listen:begin` / `# listen:end`; uninstall removes only that block.
 
 You can also select the model and language during installation:
 
@@ -326,20 +394,30 @@ Uninstall:
 - removes `~/.local/opt/sttd/.sttd/models`
 - keeps binaries and `.env` by default
 - accepts `--purge` to remove the complete installation and logs
+- removes the `.previous` rollback directory when `--purge` is used
 
-Use `~/.local/opt/sttd/uninstall.sh --purge` to remove everything.
+Use `listen uninstall` to remove everything. The command shows a warning and
+requires uppercase `Y`; scripts may use
+`~/.local/opt/sttd/uninstall.sh --purge --yes`.
 
 ### Logs
 
-If installed as `speech-to-text.service`, the daemon writes stdout and stderr to:
-
-- `~/.local/state/sttd/sttd.log`
+When installed as `speech-to-text.service`, the daemon sends stdout and stderr
+to the systemd user journal. Journald manages retention and rotation according
+to the host's systemd policy.
 
 You can inspect logs through `sttdctl`:
 
 ```bash
-~/.local/opt/sttd/sttdctl logs path --json
 ~/.local/opt/sttd/sttdctl logs tail --json --lines 200
+journalctl --user-unit speech-to-text.service --follow
+```
+
+The legacy file path command remains available for older installations that
+still use file-based service output:
+
+```bash
+~/.local/opt/sttd/sttdctl logs path --json
 ```
 
 ## Configuration
@@ -352,6 +430,10 @@ Available templates:
 
 Runtime uses a single `.env` file at the repository root or release root.
 The default transcription language is `es`.
+
+The installer also stores `STTD_PUBLIC_COMMAND_NAME`,
+`STTD_HYPRLAND_CONFIG_PATH` and `STTD_HYPRLAND_BINDING` so upgrades can keep
+the selected wrapper and desktop integration settings.
 
 ### Public variables
 
@@ -383,13 +465,19 @@ The default transcription language is `es`.
 #### Transcription
 
 - `STTD_TRANSCRIBE_BINARY_PATH`
+- `STTD_TRANSCRIBE_ACCELERATION`
+  - `auto` (default), `cpu` or `cuda`; used by the release wrapper
 - `STTD_TRANSCRIBE_MODEL_PATH`
 - `STTD_TRANSCRIBE_LANGUAGE`
 - `STTD_TRANSCRIBE_TIMEOUT`
 - `STTD_MODEL_REVISION`
-  - defaults to `main`; set an immutable Hugging Face revision for reproducible installs
-- `STTD_MODEL_SHA256_TINY`, `STTD_MODEL_SHA256_BASE`, `STTD_MODEL_SHA256_SMALL`
-  - optional SHA-256 checksums validated while downloading models
+  - defaults to the pinned Hugging Face revision `362722b3fdcd2300b58a8286933ead1c48619667`
+- `STTD_MODEL_SHA256_TINY`, `STTD_MODEL_SHA256_BASE`, `STTD_MODEL_SHA256_SMALL`, `STTD_MODEL_SHA256_LARGE`
+  - default SHA-256 checksums validated while downloading models; override them only when intentionally selecting a different revision
+- `WHISPER_SOURCE_SHA256`
+  - optional SHA-256 checksum for the macOS whisper.cpp source archive
+- `WHISPER_CPP_COMMIT`
+  - optional commit verification for containerized whisper.cpp builds
 
 #### Clipboard
 
@@ -397,6 +485,24 @@ The default transcription language is `es`.
 - `STTD_CLIPBOARD_TIMEOUT`
   - maximum time allowed for `wl-copy`, `wtype` or the platform paste command
   - defaults to `5s`; prevents clipboard integration failures from keeping a session in `processing`
+
+#### Linux audio device wake
+
+Linux audio capture uses PipeWire. The default `auto` mode detects whether the
+selected audio source belongs to a composite USB device that also exposes a
+video node. If the audio stream produces no frames, it temporarily opens the
+related video node with `mpv` so devices such as the OBSBOT Tiny 2 Lite wake
+their microphone. Ordinary microphones and Bluetooth headsets do not have a
+related video node and are left untouched.
+
+- `STTD_AUDIO_CAMERA_WAKE`
+  - `auto` (default on Linux), or `none`
+- `STTD_AUDIO_CAMERA_VIDEO_DEVICE`
+  - optional explicit V4L2 device override; normally leave empty
+
+The resolver prefers stable `/dev/v4l/by-id` paths and correlates audio/video
+through their shared USB parent. Set `STTD_AUDIO_CAMERA_WAKE=none` to disable
+the behavior, for example when another application owns the camera.
 
 ### Secondary variables
 
@@ -413,8 +519,9 @@ These still exist in config, but currently provide little or no practical value 
 
 - `make run`
 - `make test`
-- `make dev-setup PROFILE=<macos|linux|steam_deck> [MODEL=<tiny|base|small>] [LANGUAGE=<code>]`
-- `make change-model [MODEL=<tiny|base|small>]`
+- `make test-x11-docker` (runs the X11-tagged Linux test suite inside Docker)
+- `make dev-setup PROFILE=<macos|linux|steam_deck> [MODEL=<tiny|base|small|large>] [LANGUAGE=<code>]`
+- `make change-model [MODEL=<tiny|base|small|large>]`
 - `make build-whisper-cli`
 - `make build-release`
 - `make verify-release RELEASE_ARCHIVE=<path>`
@@ -429,12 +536,18 @@ These still exist in config, but currently provide little or no practical value 
   - builds the self-contained Linux release
 - `scripts/build-whisper-cli-container.sh`
   - containerized Linux build for `whisper.cpp`
+- `scripts/test-x11-docker.sh`
+  - runs the Linux X11-tagged test suite inside the build container
 - `scripts/install-whisper.sh`
   - release installer
 - `scripts/uninstall-whisper.sh`
   - removes the user service and, optionally, the installed runtime state
+- `scripts/rollback-whisper.sh`
+  - swaps the active installation with the previous release safely
 - `scripts/doctor.sh`
-  - verifies a packaged release and desktop dependencies before installation
+  - verifies a packaged release, desktop dependencies and current installation status
+- `scripts/bootstrap-install.sh`
+  - downloads and verifies a published Linux release before running its installer
 - `scripts/verify-release.sh`
   - validates a built archive, checksum, required files and X11 hotkey build
 
@@ -458,6 +571,13 @@ make dev-setup PROFILE=linux
 
 ```bash
 make test
+```
+
+For the X11-tagged Linux tests, use the host toolchain when X11 development
+headers are installed, or use the reproducible Docker-based test environment:
+
+```bash
+make test-x11-docker
 ```
 
 3. Run the app:
@@ -487,5 +607,5 @@ Additional engineering rules live in [AGENTS.md](./AGENTS.md).
 
 - published packages currently target `linux/amd64`; macOS remains development-only
 - Steam Deck support uses external control when the X11 hotkey is unavailable; it does not use `evdev`
-- the supported script-level model catalog is `tiny`, `base`, `small`
+- the supported script-level model catalog is `tiny`, `base`, `small`, `large`
 - `install.sh --as-service` uses `systemd --user`, so it applies to Linux

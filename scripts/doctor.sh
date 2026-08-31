@@ -10,6 +10,7 @@ else
 fi
 PROFILE_NAME=""
 INTEGRATION_NAME=""
+STATUS_MODE=false
 FAILURES=0
 WARNINGS=0
 
@@ -19,7 +20,7 @@ print_step() {
 
 usage() {
   cat <<'EOF'
-usage: ./doctor.sh [--profile <linux|steam_deck>] [--integration <none|hyprland>]
+usage: ./doctor.sh [--profile <linux|steam_deck>] [--integration <none|hyprland>] [--status]
 EOF
 }
 
@@ -35,6 +36,10 @@ report_fail() {
 report_warn() {
   printf 'warning: %s\n' "$1" >&2
   WARNINGS=$((WARNINGS + 1))
+}
+
+report_info() {
+  printf 'info: %s\n' "$1"
 }
 
 check_command() {
@@ -72,6 +77,10 @@ parse_args() {
         [[ $# -ge 2 ]] || { printf 'missing value for --integration\n' >&2; exit 1; }
         INTEGRATION_NAME="$2"
         shift 2
+        ;;
+      --status)
+        STATUS_MODE=true
+        shift
         ;;
       --help|-h)
         usage
@@ -138,6 +147,72 @@ check_external_control() {
   fi
 }
 
+check_installation_status() {
+  local env_file="${ROOT_DIR}/.env"
+  local version=""
+  local model_path=""
+  local socket_path=""
+
+  print_step "checking current installation status"
+
+  if [[ -f "${ROOT_DIR}/VERSION" ]]; then
+    version="$(awk 'NF { print; exit }' "${ROOT_DIR}/VERSION")"
+    report_info "version: ${version:-unknown}"
+  else
+    report_warn "VERSION file not found under ${ROOT_DIR}"
+  fi
+
+  if [[ ! -f "${env_file}" ]]; then
+    report_warn "configuration file not found: ${env_file}"
+    return
+  fi
+
+  report_info "profile: $(value_from_env_file STTD_PLATFORM_PROFILE)"
+  report_info "integration: $(value_from_env_file STTD_PLATFORM_INTEGRATION)"
+  report_info "trigger mode: $(value_from_env_file STTD_TRIGGER_MODE)"
+  report_info "language: $(value_from_env_file STTD_TRANSCRIBE_LANGUAGE)"
+  report_info "public command: $(value_from_env_file STTD_PUBLIC_COMMAND_NAME)"
+  model_path="$(value_from_env_file STTD_TRANSCRIBE_MODEL_PATH)"
+  if [[ -n "${model_path}" && -f "${model_path}" ]]; then
+    report_ok "configured model available: ${model_path}"
+  else
+    report_warn "configured model is missing: ${model_path:-unset}"
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user is-active --quiet speech-to-text.service; then
+      report_ok 'speech-to-text.service is active'
+    else
+      report_warn 'speech-to-text.service is not active'
+    fi
+  fi
+
+  if [[ "$(value_from_env_file STTD_EXTERNAL_CONTROL_ENABLED)" == "true" ]]; then
+    socket_path="$(value_from_env_file STTD_EXTERNAL_CONTROL_SOCKET_PATH)"
+    if [[ -z "${socket_path}" && -n "${XDG_RUNTIME_DIR:-}" ]]; then
+      socket_path="${XDG_RUNTIME_DIR}/sttd/control.sock"
+    fi
+    if [[ -n "${socket_path}" && -S "${socket_path}" ]]; then
+      report_ok "external control socket available: ${socket_path}"
+    else
+      report_warn "external control socket is unavailable: ${socket_path:-unset}"
+    fi
+  fi
+
+  if [[ "$(value_from_env_file STTD_PLATFORM_INTEGRATION)" == "hyprland" ]]; then
+    local hyprland_config
+    hyprland_config="$(value_from_env_file STTD_HYPRLAND_CONFIG_PATH)"
+    hyprland_config="${hyprland_config:-${HOME}/.config/hypr/hyprland.conf}"
+    report_info "Hyprland config: ${hyprland_config}"
+    report_info "Hyprland binding: $(value_from_env_file STTD_HYPRLAND_BINDING)"
+    if [[ -f "${hyprland_config}" ]] && grep -Fq '# listen:begin' "${hyprland_config}"; then
+      report_ok 'managed Hyprland bindings available'
+    else
+      report_info 'managed Hyprland bindings are not installed'
+    fi
+  fi
+}
+
 main() {
   parse_args "$@"
 
@@ -166,6 +241,10 @@ main() {
     report_ok 'systemctl available for optional user service'
   else
     report_warn 'systemctl is unavailable; run sttd manually instead of using --as-service'
+  fi
+
+  if [[ "${STATUS_MODE}" == "true" ]]; then
+    check_installation_status
   fi
 
   if [[ "${FAILURES}" -gt 0 ]]; then

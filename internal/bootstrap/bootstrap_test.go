@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -16,8 +17,7 @@ func TestBootstrap_New_WiresRequiredDependencies(t *testing.T) {
 	} else {
 		t.Setenv("STTD_PLATFORM_PROFILE", "linux")
 	}
-	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
-	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
+	setTranscriberPathsForTest(t)
 
 	boot, err := New(context.Background())
 
@@ -34,8 +34,7 @@ func TestBootstrap_New_UsesResolvedPlatformProfile(t *testing.T) {
 	} else {
 		t.Setenv("STTD_PLATFORM_PROFILE", "linux")
 	}
-	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
-	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
+	setTranscriberPathsForTest(t)
 
 	boot, err := New(context.Background())
 
@@ -57,8 +56,7 @@ func TestBootstrap_New_UsesMacOSResolvers(t *testing.T) {
 
 	t.Setenv("STTD_PLATFORM_PROFILE", "macos")
 	setProfileDefaultsForTest(t)
-	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
-	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
+	setTranscriberPathsForTest(t)
 
 	boot, err := New(context.Background())
 
@@ -77,8 +75,7 @@ func TestBootstrap_New_UsesSteamDeckResolvers(t *testing.T) {
 
 	t.Setenv("STTD_PLATFORM_PROFILE", "steam_deck")
 	setProfileDefaultsForTest(t)
-	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", "")
-	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", "")
+	setTranscriberPathsForTest(t)
 
 	boot, err := New(context.Background())
 
@@ -87,6 +84,18 @@ func TestBootstrap_New_UsesSteamDeckResolvers(t *testing.T) {
 	require.Equal(t, "f12", boot.platform.Trigger.Hotkey.Key)
 	require.Equal(t, "toggle", boot.platform.Trigger.Mode)
 	require.Equal(t, "pw-record", boot.platform.Audio.Backend)
+}
+
+func setTranscriberPathsForTest(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	binaryPath := filepath.Join(dir, "whisper-cli")
+	modelPath := filepath.Join(dir, "model.bin")
+	require.NoError(t, os.WriteFile(binaryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	require.NoError(t, os.WriteFile(modelPath, []byte("model"), 0o600))
+	t.Setenv("STTD_TRANSCRIBE_BINARY_PATH", binaryPath)
+	t.Setenv("STTD_TRANSCRIBE_MODEL_PATH", modelPath)
 }
 
 func setProfileDefaultsForTest(t *testing.T) {

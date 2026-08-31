@@ -50,6 +50,16 @@ func TestWhisperRunner_ProcessFailure_ReturnsWrappedError(t *testing.T) {
 	require.ErrorContains(t, err, "whisper failed")
 }
 
+func TestWhisperRunner_Validate_RejectsNonExecutableBinary(t *testing.T) {
+	t.Parallel()
+
+	binaryPath := filepath.Join(t.TempDir(), "whisper-cli")
+	require.NoError(t, os.WriteFile(binaryPath, []byte("binary"), 0o600))
+	runner := NewWhisperRunner(binaryPath, writeModelFile(t), "en", time.Second)
+
+	require.ErrorIs(t, runner.Validate(), ErrInvalidConfig)
+}
+
 func TestWhisperRunner_EmptyStdout_ReturnsTranscriptionError(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +74,14 @@ func TestWhisperRunner_EmptyStdout_ReturnsTranscriptionError(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrTranscription)
 	require.EqualError(t, err, "transcription failed: empty transcript output")
+}
+
+func TestParseTranscriptOutput_IgnoresNonSegmentLines(t *testing.T) {
+	t.Parallel()
+
+	output := "warning: device unavailable\n[WARN] not a transcript\n[00:00:00.000 --> 00:00:01.000] keep this\n"
+
+	require.Equal(t, "keep this", parseTranscriptOutput(output))
 }
 
 func TestWhisperRunner_Success_ParsesTranscript(t *testing.T) {

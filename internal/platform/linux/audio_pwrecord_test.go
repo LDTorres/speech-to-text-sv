@@ -1,3 +1,5 @@
+//go:build linux
+
 package linux
 
 import (
@@ -22,12 +24,30 @@ func TestPWRecordRecorder_Start_SpawnsProcess(t *testing.T) {
 		require.Equal(t, filepath.Join(recorder.tempDir, recorder.fileName), args[len(args)-1])
 		return proc
 	}
-	recorder.commandName = testExecutableName(t)
+	configureTestCommand(recorder)
 
 	err := recorder.Start(context.Background())
 
 	require.NoError(t, err)
 	require.True(t, proc.started)
+}
+
+func TestPWRecordRecorder_Start_RemovesPreviousRecording(t *testing.T) {
+	t.Parallel()
+
+	proc := &fakeProcess{}
+	recorder := NewPWRecordRecorder(t.TempDir(), "recording.wav", "")
+	configureTestCommand(recorder)
+	recorder.newProcess = func(ctx context.Context, name string, args []string) process {
+		return proc
+	}
+	outputPath := filepath.Join(recorder.tempDir, recorder.fileName)
+	require.NoError(t, os.WriteFile(outputPath, usableWAV(), 0o644))
+
+	require.NoError(t, recorder.Start(context.Background()))
+	require.True(t, proc.started)
+	_, err := os.Stat(outputPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestPWRecordRecorder_Stop_WithoutStart_ReturnsError(t *testing.T) {
@@ -45,7 +65,7 @@ func TestPWRecordRecorder_Stop_AfterStart_ReturnsRecording(t *testing.T) {
 
 	proc := &fakeProcess{}
 	recorder := NewPWRecordRecorder(t.TempDir(), "recording.wav", "")
-	recorder.commandName = testExecutableName(t)
+	configureTestCommand(recorder)
 	recorder.newProcess = func(ctx context.Context, name string, args []string) process {
 		return proc
 	}
@@ -64,7 +84,7 @@ func TestPWRecordRecorder_Start_Twice_ReturnsError(t *testing.T) {
 	t.Parallel()
 
 	recorder := NewPWRecordRecorder(t.TempDir(), "recording.wav", "")
-	recorder.commandName = testExecutableName(t)
+	configureTestCommand(recorder)
 	recorder.newProcess = func(ctx context.Context, name string, args []string) process {
 		return &fakeProcess{}
 	}
@@ -81,7 +101,7 @@ func TestPWRecordRecorder_ProcessFailure_ReturnsWrappedError(t *testing.T) {
 
 	proc := &fakeProcess{waitErr: errors.New("exit status 1"), stderr: "device failure"}
 	recorder := NewPWRecordRecorder(t.TempDir(), "recording.wav", "")
-	recorder.commandName = testExecutableName(t)
+	configureTestCommand(recorder)
 	recorder.newProcess = func(ctx context.Context, name string, args []string) process {
 		return proc
 	}
@@ -98,7 +118,7 @@ func TestPWRecordRecorder_Stop_AllowsUsableRecordingWhenProcessExitsNonZero(t *t
 
 	proc := &fakeProcess{waitErr: errors.New("exit status 1")}
 	recorder := NewPWRecordRecorder(t.TempDir(), "recording.wav", "")
-	recorder.commandName = testExecutableName(t)
+	configureTestCommand(recorder)
 	recorder.newProcess = func(ctx context.Context, name string, args []string) process {
 		return proc
 	}
@@ -145,7 +165,7 @@ func TestPWRecordRecorder_Stop_UsesTimeout(t *testing.T) {
 
 	proc := &blockingProcess{}
 	recorder := NewPWRecordRecorder(t.TempDir(), "recording.wav", "")
-	recorder.commandName = testExecutableName(t)
+	configureTestCommand(recorder)
 	recorder.stopTimeout = 10 * time.Millisecond
 	recorder.newProcess = func(ctx context.Context, name string, args []string) process {
 		return proc
@@ -225,17 +245,9 @@ func (p *blockingProcess) Stderr() string {
 	return ""
 }
 
-func testExecutableName(t *testing.T) string {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "pw-record")
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
-
-	originalPath := os.Getenv("PATH")
-	require.NoError(t, os.Setenv("PATH", filepath.Dir(path)+string(os.PathListSeparator)+originalPath))
-	t.Cleanup(func() {
-		require.NoError(t, os.Setenv("PATH", originalPath))
-	})
-
-	return "pw-record"
+func configureTestCommand(recorder *PWRecordRecorder) {
+	recorder.commandName = "pw-record"
+	recorder.lookupPath = func(string) (string, error) {
+		return "/usr/bin/pw-record", nil
+	}
 }

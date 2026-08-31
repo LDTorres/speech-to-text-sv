@@ -16,6 +16,33 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestResolveSocketPath_RejectsRelativePath(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResolveSocketPath("relative/control.sock")
+
+	require.EqualError(t, err, "external control socket path must be absolute")
+}
+
+func TestServer_StopClosesBlockedConnection(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	server, err := NewServer(zap.NewNop(), filepath.Join(tempDir, "control.sock"), &stubSessionService{})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, server.Start(ctx))
+
+	conn, err := net.Dial("unix", server.SocketPath())
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+	defer stopCancel()
+	require.NoError(t, server.Stop(stopCtx))
+}
+
 func TestServer_PingReturnsStatus(t *testing.T) {
 	t.Parallel()
 

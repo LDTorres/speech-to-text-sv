@@ -16,6 +16,8 @@ fi
 
 # shellcheck source=scripts/lib/model.sh
 source "${SOURCE_ROOT}/scripts/lib/model.sh"
+# shellcheck source=scripts/lib/hyprland.sh
+source "${SOURCE_ROOT}/scripts/lib/hyprland.sh"
 
 INSTALL_DIR="${STTD_INSTALL_DIR:-${HOME}/.local/opt/sttd}"
 PROFILE_NAME="linux"
@@ -23,9 +25,21 @@ INTEGRATION_NAME=""
 AS_SERVICE=false
 CHECK_ONLY=false
 IN_PLACE=false
+INTERACTIVE_MODE=""
 PROFILE_CHANGED=false
+PROFILE_EXPLICIT=false
+INTEGRATION_EXPLICIT=false
+LANGUAGE_EXPLICIT=false
+AS_SERVICE_EXPLICIT=false
 MODEL_NAME="${STTD_DEFAULT_MODEL}"
+MODEL_EXPLICIT=false
 LANGUAGE_NAME="${STTD_TRANSCRIBE_LANGUAGE:-es}"
+COMMAND_NAME="${STTD_PUBLIC_COMMAND_NAME:-listen}"
+COMMAND_NAME_EXPLICIT=false
+HYPRLAND_BINDINGS=""
+HYPRLAND_BINDINGS_EXPLICIT=false
+HYPRLAND_CONFIG_PATH="${STTD_HYPRLAND_CONFIG_PATH:-${HOME}/.config/hypr/hyprland.conf}"
+HYPRLAND_BINDING="${STTD_HYPRLAND_BINDING:-\$mainMod ALT, SPACE}"
 SERVICE_NAME="speech-to-text.service"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 SYSTEMD_UNIT_PATH="${SYSTEMD_USER_DIR}/${SERVICE_NAME}"
@@ -42,6 +56,10 @@ WHISPER_CPP_VERSION="${WHISPER_CPP_VERSION:-v1.8.4}"
 
 print_step() {
   printf '\n==> [%s/%s] %s\n' "$1" "$2" "$3"
+}
+
+escape_sed_replacement() {
+  printf '%s' "$1" | sed 's/[\\&|]/\\&/g'
 }
 
 set_runtime_paths() {
@@ -64,9 +82,14 @@ usage: ./install.sh [options]
 options:
   --profile <linux|steam_deck>       runtime profile (default: linux)
   --integration <none|hyprland>      optional desktop integration
-  --model <tiny|base|small>          model to download (default: base)
+  --model <tiny|base|small|large>    model to download (default: base)
   --language <code>                  transcription language (default: es)
   --as-service                       install and start a systemd --user service
+  --interactive                      ask setup questions before installing
+  --non-interactive                  use flags and defaults without prompts
+  --command-name <name>              public command name (default: listen)
+  --hyprland-bindings <yes|no>       manage optional Hyprland bindings
+  --hyprland-config <path>           Hyprland config file to manage
   --install-dir <path>               stable installation directory
   --in-place                         keep the unpacked release as the installation directory
   --check                            validate dependencies without modifying files
@@ -87,26 +110,56 @@ parse_args() {
       --profile)
         [[ $# -ge 2 ]] || { printf 'missing value for --profile\n' >&2; exit 1; }
         PROFILE_NAME="$2"
+        PROFILE_EXPLICIT=true
         shift 2
         ;;
       --integration)
         [[ $# -ge 2 ]] || { printf 'missing value for --integration\n' >&2; exit 1; }
         INTEGRATION_NAME="$2"
+        INTEGRATION_EXPLICIT=true
         shift 2
         ;;
       --model)
         [[ $# -ge 2 ]] || { printf 'missing value for --model\n' >&2; exit 1; }
         MODEL_NAME="$2"
+        MODEL_EXPLICIT=true
         shift 2
         ;;
       --language)
         [[ $# -ge 2 ]] || { printf 'missing value for --language\n' >&2; exit 1; }
         LANGUAGE_NAME="$2"
+        LANGUAGE_EXPLICIT=true
         shift 2
         ;;
       --as-service)
         AS_SERVICE=true
+        AS_SERVICE_EXPLICIT=true
         shift
+        ;;
+      --interactive)
+        INTERACTIVE_MODE=true
+        shift
+        ;;
+      --non-interactive)
+        INTERACTIVE_MODE=false
+        shift
+        ;;
+      --command-name)
+        [[ $# -ge 2 ]] || { printf 'missing value for --command-name\n' >&2; exit 1; }
+        COMMAND_NAME="$2"
+        COMMAND_NAME_EXPLICIT=true
+        shift 2
+        ;;
+      --hyprland-bindings)
+        [[ $# -ge 2 ]] || { printf 'missing value for --hyprland-bindings\n' >&2; exit 1; }
+        HYPRLAND_BINDINGS="$2"
+        HYPRLAND_BINDINGS_EXPLICIT=true
+        shift 2
+        ;;
+      --hyprland-config)
+        [[ $# -ge 2 ]] || { printf 'missing value for --hyprland-config\n' >&2; exit 1; }
+        HYPRLAND_CONFIG_PATH="$2"
+        shift 2
         ;;
       --install-dir)
         [[ $# -ge 2 ]] || { printf 'missing value for --install-dir\n' >&2; exit 1; }
@@ -132,6 +185,17 @@ parse_args() {
         ;;
     esac
   done
+
+  if [[ -z "${INTERACTIVE_MODE}" ]]; then
+    if [[ -t 0 && -t 1 ]]; then
+      INTERACTIVE_MODE=true
+    else
+      INTERACTIVE_MODE=false
+    fi
+  fi
+
+  preserve_existing_settings
+  configure_interactive_defaults
 
   case "${PROFILE_NAME}" in
     linux|steam_deck)
@@ -159,6 +223,125 @@ parse_args() {
   fi
 
   sttd_require_valid_model "${MODEL_NAME}"
+  case "${HYPRLAND_BINDINGS}" in
+    ''|yes|no|true|false)
+      ;;
+    *)
+      printf 'invalid --hyprland-bindings value: %s (expected yes or no)\n' "${HYPRLAND_BINDINGS}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+prompt_value() {
+  local label="$1"
+  local default_value="$2"
+  local input
+
+  printf '%s [%s]: ' "${label}" "${default_value}" >&2
+  read -r input
+  printf '%s\n' "${input:-${default_value}}"
+}
+
+prompt_yes_no() {
+  local label="$1"
+  local default_value="$2"
+  local input
+
+  while true; do
+    printf '%s [%s]: ' "${label}" "${default_value}" >&2
+    read -r input
+    input="${input:-${default_value}}"
+    case "${input,,}" in
+      y|yes) printf 'true\n'; return ;;
+      n|no) printf 'false\n'; return ;;
+      *) printf 'please answer yes or no\n' >&2 ;;
+    esac
+  done
+}
+
+existing_install_value() {
+  local key="$1"
+  local file="${INSTALL_DIR}/.env"
+  [[ -f "${file}" ]] || return 0
+  awk -F= -v key="${key}" '$1 == key { value = substr($0, length(key) + 2) } END { print value }' "${file}"
+}
+
+preserve_existing_settings() {
+  local value
+
+  value="$(existing_install_value STTD_PLATFORM_PROFILE)"
+  [[ "${PROFILE_EXPLICIT}" == "true" || -z "${value}" ]] || PROFILE_NAME="${value}"
+  value="$(existing_install_value STTD_PLATFORM_INTEGRATION)"
+  [[ "${INTEGRATION_EXPLICIT}" == "true" || -z "${value}" ]] || INTEGRATION_NAME="${value}"
+  value="$(existing_install_value STTD_TRANSCRIBE_LANGUAGE)"
+  [[ "${LANGUAGE_EXPLICIT}" == "true" || -z "${value}" ]] || LANGUAGE_NAME="${value}"
+  value="$(existing_install_value STTD_PUBLIC_COMMAND_NAME)"
+  [[ "${COMMAND_NAME_EXPLICIT}" == "true" || -z "${value}" ]] || COMMAND_NAME="${value}"
+  value="$(existing_install_value STTD_HYPRLAND_CONFIG_PATH)"
+  [[ -z "${value}" ]] || HYPRLAND_CONFIG_PATH="${value}"
+  value="$(existing_install_value STTD_HYPRLAND_BINDING)"
+  [[ -z "${value}" ]] || HYPRLAND_BINDING="${value}"
+  if [[ "${AS_SERVICE_EXPLICIT}" != "true" && -f "${SYSTEMD_UNIT_PATH}" ]]; then
+    AS_SERVICE=true
+  fi
+  if [[ "${HYPRLAND_BINDINGS_EXPLICIT}" != "true" && -n "$(existing_install_value STTD_HYPRLAND_BINDING)" ]]; then
+    if grep -Fq '# listen:begin' "${HYPRLAND_CONFIG_PATH}" 2>/dev/null; then
+      HYPRLAND_BINDINGS=true
+    fi
+  fi
+}
+
+configure_interactive_defaults() {
+  local configured_profile configured_integration configured_language configured_model
+
+  [[ "${INTERACTIVE_MODE}" == "true" && "${CHECK_ONLY}" != "true" ]] || return 0
+  configured_profile="$(existing_install_value STTD_PLATFORM_PROFILE)"
+  configured_integration="$(existing_install_value STTD_PLATFORM_INTEGRATION)"
+  configured_language="$(existing_install_value STTD_TRANSCRIBE_LANGUAGE)"
+  configured_model="$(existing_install_value STTD_TRANSCRIBE_MODEL_PATH)"
+
+  if [[ "${PROFILE_EXPLICIT}" != "true" ]]; then
+    PROFILE_NAME="$(prompt_value 'Runtime profile (linux or steam_deck)' "${configured_profile:-${PROFILE_NAME}}")"
+  fi
+  if [[ "${INTEGRATION_EXPLICIT}" != "true" ]]; then
+    local integration_default="${configured_integration:-none}"
+    if [[ -z "${configured_integration}" && "${PROFILE_NAME}" == "linux" && -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+      integration_default=hyprland
+    fi
+    INTEGRATION_NAME="$(prompt_value 'Desktop integration (none or hyprland)' "${integration_default}")"
+  fi
+  if [[ "${MODEL_EXPLICIT}" != "true" ]]; then
+    local configured_model_name=""
+    if [[ -n "${configured_model}" ]]; then
+      configured_model_name="$(basename "${configured_model}")"
+      configured_model_name="${configured_model_name#ggml-}"
+      configured_model_name="${configured_model_name%.bin}"
+      [[ "${configured_model_name}" == "large-v3" ]] && configured_model_name=large
+    fi
+    MODEL_NAME="$(sttd_prompt_for_model "${configured_model_name:-${MODEL_NAME}}")"
+    MODEL_EXPLICIT=true
+  fi
+  if [[ "${LANGUAGE_EXPLICIT}" != "true" ]]; then
+    LANGUAGE_NAME="$(prompt_value 'Transcription language' "${configured_language:-${LANGUAGE_NAME}}")"
+  fi
+  if [[ "${AS_SERVICE_EXPLICIT}" != "true" ]]; then
+    local service_default=no
+    [[ "${AS_SERVICE}" == "true" ]] && service_default=yes
+    if [[ "$(prompt_yes_no 'Install and start a systemd user service?' "${service_default}")" == "true" ]]; then
+      AS_SERVICE=true
+    else
+      AS_SERVICE=false
+    fi
+  fi
+  if [[ "${COMMAND_NAME_EXPLICIT}" != "true" ]]; then
+    COMMAND_NAME="$(prompt_value 'Public command name' "${COMMAND_NAME}")"
+  fi
+  if [[ "${INTEGRATION_NAME}" == "hyprland" && "${HYPRLAND_BINDINGS_EXPLICIT}" != "true" ]]; then
+    local binding_default=no
+    [[ "${HYPRLAND_BINDINGS}" == "true" ]] && binding_default=yes
+    HYPRLAND_BINDINGS="$(prompt_yes_no 'Manage a Hyprland hold/release binding?' "${binding_default}")"
+  fi
 }
 
 validate_install_dir() {
@@ -179,12 +362,19 @@ profile_template_path() {
 }
 
 ensure_release_layout() {
+  local cpu_runtime
+
   if [[ ! -x "${ROOT_DIR}/sttd" || ! -x "${ROOT_DIR}/sttdctl" ]]; then
     printf 'release layout is incomplete; expected sttd and sttdctl under %s\n' "${ROOT_DIR}" >&2
     exit 1
   fi
-  if [[ ! -x "${WHISPER_BINARY_PATH}" || ! -x "${WHISPER_BIN_DIR}/${WHISPER_BINARY_NAME}.real" ]]; then
-    printf 'release layout is incomplete; expected whisper runtime under %s\n' "${WHISPER_BIN_DIR}" >&2
+  if [[ ! -x "${WHISPER_BINARY_PATH}" ]]; then
+    printf 'release layout is incomplete; expected whisper wrapper under %s\n' "${WHISPER_BIN_DIR}" >&2
+    exit 1
+  fi
+  cpu_runtime="$(find "${WHISPER_BIN_DIR}/cpu" -maxdepth 1 -type f -name '*.real' -perm /111 -print -quit 2>/dev/null)"
+  if [[ -z "${cpu_runtime}" ]]; then
+    printf 'release layout is incomplete; expected CPU whisper runtime under %s/cpu\n' "${WHISPER_BIN_DIR}" >&2
     exit 1
   fi
   if [[ ! -f "$(profile_template_path)" ]]; then
@@ -193,6 +383,90 @@ ensure_release_layout() {
   fi
   if [[ ! -x "${DOCTOR_PATH}" ]]; then
     printf 'release layout is incomplete; expected doctor script: %s\n' "${DOCTOR_PATH}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${SOURCE_ROOT}/scripts/listen.sh" ]]; then
+    printf 'release layout is incomplete; expected public command template: %s/scripts/listen.sh\n' "${SOURCE_ROOT}/scripts" >&2
+    exit 1
+  fi
+}
+
+validate_command_name() {
+  if [[ ! "${COMMAND_NAME}" =~ ^[a-z][a-z0-9_-]*$ ]]; then
+    printf 'invalid public command name: %s (use lowercase letters, numbers, _ or -)\n' "${COMMAND_NAME}" >&2
+    exit 1
+  fi
+}
+
+resolve_command_collision() {
+  local command_path
+
+  validate_command_name
+  command_path="${HOME}/.local/bin/${COMMAND_NAME}"
+  while [[ -e "${command_path}" ]] && ! grep -Fq 'sttd-managed-wrapper' "${command_path}"; do
+    if [[ "${INTERACTIVE_MODE}" != "true" ]]; then
+      printf 'public command already exists: %s; choose another name with --command-name\n' "${command_path}" >&2
+      exit 1
+    fi
+    COMMAND_NAME="$(prompt_value "Public command already exists; choose another name" "${COMMAND_NAME}-cli")"
+    validate_command_name
+    command_path="${HOME}/.local/bin/${COMMAND_NAME}"
+  done
+}
+
+select_hyprland_binding() {
+  local selection
+
+  [[ "${HYPRLAND_BINDINGS}" == "true" || "${HYPRLAND_BINDINGS}" == "yes" ]] || return 0
+  if [[ "${HYPRLAND_BINDINGS_EXPLICIT}" == "true" || "${INTERACTIVE_MODE}" != "true" ]]; then
+    return
+  fi
+
+  printf '\nHyprland binding choices:\n' >&2
+  printf "  1. \$mainMod ALT, SPACE (recommended)\n" >&2
+  printf "  2. \$mainMod SHIFT, SPACE\n" >&2
+  printf '  3. CTRL ALT, SPACE\n' >&2
+  printf '  4. enter a custom "MODIFIERS, KEY" value\n' >&2
+  selection="$(prompt_value 'Binding choice' 1)"
+  case "${selection}" in
+    1) HYPRLAND_BINDING="\$mainMod ALT, SPACE" ;;
+    2) HYPRLAND_BINDING="\$mainMod SHIFT, SPACE" ;;
+    3) HYPRLAND_BINDING='CTRL ALT, SPACE' ;;
+    4) HYPRLAND_BINDING="$(prompt_value 'Custom binding (MODIFIERS, KEY)' "${HYPRLAND_BINDING}")" ;;
+    *)
+      if [[ "${selection}" == *,* ]]; then
+        HYPRLAND_BINDING="${selection}"
+      else
+        printf 'invalid Hyprland binding choice: %s\n' "${selection}" >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+confirm_large_model() {
+  [[ "${MODEL_NAME}" == "large" && "${INTERACTIVE_MODE}" == "true" ]] || return 0
+  printf 'warning: large is a %s model and may require substantial memory\n' "$(sttd_model_display_size large)" >&2
+  if [[ "$(prompt_yes_no 'Continue with the large model?' no)" != "true" ]]; then
+    printf 'installation cancelled before downloading the large model\n' >&2
+    exit 1
+  fi
+}
+
+confirm_setup_summary() {
+  [[ "${INTERACTIVE_MODE}" == "true" && "${CHECK_ONLY}" != "true" ]] || return 0
+  printf '\nSetup summary:\n' >&2
+  printf '  profile: %s\n' "${PROFILE_NAME}" >&2
+  printf '  integration: %s\n' "${INTEGRATION_NAME:-none}" >&2
+  printf '  model: %s (%s)\n' "${MODEL_NAME}" "$(sttd_model_display_size "${MODEL_NAME}")" >&2
+  printf '  language: %s\n' "${LANGUAGE_NAME}" >&2
+  printf '  systemd user service: %s\n' "${AS_SERVICE}" >&2
+  printf '  public command: %s\n' "${COMMAND_NAME}" >&2
+  if [[ "${INTEGRATION_NAME}" == "hyprland" ]]; then
+    printf '  Hyprland bindings: %s (%s)\n' "${HYPRLAND_BINDINGS:-no}" "${HYPRLAND_BINDING}" >&2
+  fi
+  if [[ "$(prompt_yes_no 'Continue with this setup?' yes)" != "true" ]]; then
+    printf 'installation cancelled before changing files\n' >&2
     exit 1
   fi
 }
@@ -267,6 +541,20 @@ ensure_env_file() {
   fi
 }
 
+select_model() {
+  local configured_model
+
+  if [[ "${MODEL_EXPLICIT}" == "true" ]]; then
+    return
+  fi
+
+  configured_model="$(sttd_current_model_from_env "${ENV_FILE}")"
+  if [[ -n "${configured_model}" ]]; then
+    MODEL_NAME="${configured_model}"
+    printf 'preserving configured model selection: %s\n' "${MODEL_NAME}"
+  fi
+}
+
 configure_env_file() {
   local external_control=false
 
@@ -284,6 +572,10 @@ configure_env_file() {
   sttd_set_env_value "${ENV_FILE}" "STTD_MODEL_SHA256_TINY" "${STTD_MODEL_SHA256_TINY:-}"
   sttd_set_env_value "${ENV_FILE}" "STTD_MODEL_SHA256_BASE" "${STTD_MODEL_SHA256_BASE:-}"
   sttd_set_env_value "${ENV_FILE}" "STTD_MODEL_SHA256_SMALL" "${STTD_MODEL_SHA256_SMALL:-}"
+  sttd_set_env_value "${ENV_FILE}" "STTD_MODEL_SHA256_LARGE" "${STTD_MODEL_SHA256_LARGE:-}"
+  sttd_set_env_value "${ENV_FILE}" "STTD_PUBLIC_COMMAND_NAME" "${COMMAND_NAME}"
+  sttd_set_env_value "${ENV_FILE}" "STTD_HYPRLAND_CONFIG_PATH" "${HYPRLAND_CONFIG_PATH}"
+  sttd_set_env_value "${ENV_FILE}" "STTD_HYPRLAND_BINDING" "${HYPRLAND_BINDING}"
 
   if [[ "${PROFILE_CHANGED}" == "true" ]]; then
     if [[ "${PROFILE_NAME}" == "linux" ]]; then
@@ -294,26 +586,84 @@ configure_env_file() {
   fi
 }
 
+install_public_command() {
+  local command_dir="${HOME}/.local/bin"
+  local command_path="${command_dir}/${COMMAND_NAME}"
+  local generated_path escaped_root_dir
+
+  validate_command_name
+  if [[ -e "${command_path}" ]] && ! grep -Fq 'sttd-managed-wrapper' "${command_path}"; then
+    printf 'public command already exists: %s; choose another name with --command-name\n' "${command_path}" >&2
+    exit 1
+  fi
+
+  mkdir -p "${command_dir}"
+  generated_path="$(mktemp)"
+  escaped_root_dir="$(escape_sed_replacement "${ROOT_DIR}")"
+  sed "s|__STTD_INSTALL_DIR__|${escaped_root_dir}|g" \
+    "${SOURCE_ROOT}/scripts/listen.sh" > "${generated_path}"
+  install -m 755 "${generated_path}" "${command_path}"
+  rm -f "${generated_path}"
+  printf 'public command installed: %s\n' "${command_path}"
+}
+
+configure_hyprland_bindings() {
+  if [[ "${INTEGRATION_NAME}" != "hyprland" || "${HYPRLAND_BINDINGS}" != "true" && "${HYPRLAND_BINDINGS}" != "yes" ]]; then
+    return
+  fi
+  if [[ ! -f "${HYPRLAND_CONFIG_PATH}" ]]; then
+    printf 'Hyprland bindings skipped because the config does not exist: %s\n' "${HYPRLAND_CONFIG_PATH}" >&2
+    return
+  fi
+  sttd_hyprland_install_bindings "${HYPRLAND_CONFIG_PATH}" "${HYPRLAND_BINDING}" "${HOME}/.local/bin/${COMMAND_NAME}"
+  if command -v hyprctl >/dev/null 2>&1; then
+    hyprctl reload >/dev/null 2>&1 || printf 'warning: unable to reload Hyprland; reload it manually\n' >&2
+  else
+    printf 'reload Hyprland to activate the managed bindings\n'
+  fi
+  printf 'Hyprland bindings installed in: %s\n' "${HYPRLAND_CONFIG_PATH}"
+}
+
 install_user_service() {
+  local environment_names=()
+  local environment_name
+
   need_cmd systemctl
 
   mkdir -p "${SYSTEMD_USER_DIR}" "${LOG_DIR}"
+  local escaped_root_dir escaped_env_file escaped_exec_start
+  escaped_root_dir="$(escape_sed_replacement "${ROOT_DIR}")"
+  escaped_env_file="$(escape_sed_replacement "${ENV_FILE}")"
+  escaped_exec_start="$(escape_sed_replacement "${ROOT_DIR}/sttd")"
   sed \
-    -e "s|__WORKING_DIRECTORY__|${ROOT_DIR}|g" \
-    -e "s|__ENV_FILE__|${ENV_FILE}|g" \
-    -e "s|__EXEC_START__|${ROOT_DIR}/sttd|g" \
+    -e "s|__WORKING_DIRECTORY__|${escaped_root_dir}|g" \
+    -e "s|__ENV_FILE__|${escaped_env_file}|g" \
+    -e "s|__EXEC_START__|${escaped_exec_start}|g" \
     "${SERVICE_TEMPLATE_PATH}" > "${SYSTEMD_UNIT_PATH}"
 
-  systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR XAUTHORITY DBUS_SESSION_BUS_ADDRESS || true
+  for environment_name in DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR XAUTHORITY DBUS_SESSION_BUS_ADDRESS; do
+    if [[ -n "${!environment_name:-}" ]]; then
+      environment_names+=("${environment_name}")
+    fi
+  done
+  if [[ "${#environment_names[@]}" -gt 0 ]]; then
+    systemctl --user import-environment "${environment_names[@]}" || true
+  fi
   systemctl --user daemon-reload
-  systemctl --user enable --now "${SERVICE_NAME}"
+  systemctl --user enable "${SERVICE_NAME}"
+  if systemctl --user is-active --quiet "${SERVICE_NAME}"; then
+    systemctl --user restart "${SERVICE_NAME}"
+  else
+    systemctl --user start "${SERVICE_NAME}"
+  fi
 }
 
 print_next_steps() {
   printf '\ninstallation directory: %s\n' "${ROOT_DIR}"
   printf 'profile selected: %s\n' "${PROFILE_NAME}"
-  printf 'selected model: %s (%s)\n' "${MODEL_NAME}" "${STTD_MODEL_ACTION}"
+  printf 'selected model: %s (%s, approximately %s)\n' "${MODEL_NAME}" "${STTD_MODEL_ACTION}" "$(sttd_model_display_size "${MODEL_NAME}")"
   printf 'selected language: %s\n' "${LANGUAGE_NAME}"
+  printf 'public command: %s\n' "${HOME}/.local/bin/${COMMAND_NAME}"
   printf 'configuration: %s\n' "${ENV_FILE}"
   printf 'diagnostics: %s/doctor.sh\n' "${ROOT_DIR}"
 
@@ -325,17 +675,19 @@ print_next_steps() {
   fi
 
   if [[ "${INTEGRATION_NAME}" == "hyprland" ]]; then
-    printf '\nHyprland bindings must use the absolute sttdctl path:\n'
-    # shellcheck disable=SC2016
-    printf '  bind = $mainMod, D, exec, %s/sttdctl control start\n' "${ROOT_DIR}"
-    # shellcheck disable=SC2016
-    printf '  bindr = $mainMod, D, exec, %s/sttdctl control stop\n' "${ROOT_DIR}"
+    printf 'Hyprland integration: %s\n' "${HYPRLAND_BINDINGS:-not configured}"
   fi
+  case ":${PATH:-}:" in
+    *":${HOME}/.local/bin:"*) ;;
+    *) printf 'add %s to PATH to use %s directly\n' "${HOME}/.local/bin" "${COMMAND_NAME}" ;;
+  esac
 }
 
 main() {
   parse_args "$@"
   validate_install_dir
+  resolve_command_collision
+  confirm_setup_summary
 
   print_step 1 5 "validating the release package and system dependencies"
   ensure_release_layout
@@ -352,11 +704,15 @@ main() {
 
   print_step 3 5 "creating and configuring the ${PROFILE_NAME} profile"
   ensure_env_file
+  select_model
   sttd_load_model_source_config "${ENV_FILE}"
 
   print_step 4 5 "preparing the ${MODEL_NAME} model"
+  confirm_large_model
   sttd_ensure_model_downloaded "${MODEL_NAME}" "${WHISPER_MODEL_DIR}"
+  select_hyprland_binding
   configure_env_file
+  install_public_command
 
   if [[ "${AS_SERVICE}" == "true" ]]; then
     print_step 5 5 "installing and starting the user service"
@@ -364,6 +720,8 @@ main() {
   else
     print_step 5 5 "finalizing the configuration"
   fi
+
+  configure_hyprland_bindings
 
   printf '\ninstallation completed successfully\n'
   print_next_steps

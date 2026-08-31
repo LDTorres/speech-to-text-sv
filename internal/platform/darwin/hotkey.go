@@ -95,8 +95,17 @@ func (s *HotkeySource) Stop(ctx context.Context) error {
 	cancel()
 
 	if binding != nil {
-		if err := binding.Unregister(); err != nil {
-			return fmt.Errorf("unregister mac hotkey: %w", err)
+		unregisterDone := make(chan error, 1)
+		go func() {
+			unregisterDone <- binding.Unregister()
+		}()
+		select {
+		case err := <-unregisterDone:
+			if err != nil {
+				return fmt.Errorf("unregister mac hotkey: %w", err)
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
@@ -115,14 +124,20 @@ func (s *HotkeySource) run(ctx context.Context, done chan struct{}, binding hotk
 		select {
 		case <-ctx.Done():
 			return
-		case <-binding.Keydown():
+		case _, ok := <-binding.Keydown():
+			if !ok {
+				return
+			}
 			if !emitSourceEvent(ctx, s.events, trigger.SourceEvent{
 				Kind: trigger.SourceEventPress,
 				At:   time.Now().UTC(),
 			}) {
 				return
 			}
-		case <-binding.Keyup():
+		case _, ok := <-binding.Keyup():
+			if !ok {
+				return
+			}
 			if !emitSourceEvent(ctx, s.events, trigger.SourceEvent{
 				Kind: trigger.SourceEventRelease,
 				At:   time.Now().UTC(),
@@ -134,6 +149,9 @@ func (s *HotkeySource) run(ctx context.Context, done chan struct{}, binding hotk
 }
 
 func emitSourceEvent(ctx context.Context, events chan trigger.SourceEvent, event trigger.SourceEvent) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	select {
 	case events <- event:
 		return true

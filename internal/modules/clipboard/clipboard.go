@@ -34,9 +34,11 @@ type commandSpec struct {
 	stdin string
 }
 
-type commandExecutor func(ctx context.Context, spec commandSpec) error
-type pathLookup func(string) (string, error)
-type envLookup func(string) string
+type (
+	commandExecutor func(ctx context.Context, spec commandSpec) error
+	pathLookup      func(string) (string, error)
+	envLookup       func(string) string
+)
 
 type SystemClipboard struct {
 	logger         *zap.Logger
@@ -61,7 +63,7 @@ func NewSystemForOS(logger *zap.Logger, enablePaste bool, targetOS string) *Syst
 	return NewSystemForConfig(logger, enablePaste, defaultCommandTimeout, targetOS, "", "")
 }
 
-func NewSystemForConfig(logger *zap.Logger, enablePaste bool, commandTimeout time.Duration, targetOS string, preferredCopy string, preferredPaste string) *SystemClipboard {
+func NewSystemForConfig(logger *zap.Logger, enablePaste bool, commandTimeout time.Duration, targetOS, preferredCopy, preferredPaste string) *SystemClipboard {
 	if commandTimeout <= 0 {
 		commandTimeout = defaultCommandTimeout
 	}
@@ -124,7 +126,8 @@ func (c *SystemClipboard) Paste(ctx context.Context) error {
 	}
 
 	if !c.enablePaste {
-		return ErrPasteDisabled
+		c.logger.Info("clipboard paste skipped; paste injection is disabled", zap.Int("text_length", len(text)))
+		return nil
 	}
 
 	spec, err := c.resolvePasteCommand(text)
@@ -270,7 +273,7 @@ func (c *SystemClipboard) execute(ctx context.Context, spec commandSpec) error {
 }
 
 func runCommand(ctx context.Context, spec commandSpec) error {
-	cmd := exec.CommandContext(ctx, spec.name, spec.args...)
+	cmd := exec.CommandContext(ctx, spec.name, spec.args...) // #nosec G204 -- command specs come from an internal allowlist
 	if spec.stdin != "" {
 		cmd.Stdin = bytes.NewBufferString(spec.stdin)
 	}
@@ -288,7 +291,7 @@ func runCommand(ctx context.Context, spec commandSpec) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%v (output: %s)", err, string(bytes.TrimSpace(output)))
+		return fmt.Errorf("%w (output: %s)", err, string(bytes.TrimSpace(output)))
 	}
 
 	return nil

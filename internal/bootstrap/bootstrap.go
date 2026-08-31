@@ -58,6 +58,9 @@ func New(ctx context.Context) (*Bootstrap, error) {
 		cfg.Transcribe.Language,
 		cfg.Transcribe.Timeout,
 	)
+	if err := transcriber.Validate(); err != nil {
+		return nil, fmt.Errorf("validate transcriber: %w", err)
+	}
 	clipboard := platform.NewClipboard(logger, cfg.Clipboard.EnablePaste, cfg.Clipboard.Timeout, resolvedPlatform)
 
 	var notifier notify.Notifier = notify.NewNoop()

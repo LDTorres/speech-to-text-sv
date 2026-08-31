@@ -56,6 +56,9 @@ func TestRecorder_Stop_AfterStart_ReturnsRecordingWithPath(t *testing.T) {
 	content, readErr := os.ReadFile(recording.Path)
 	require.NoError(t, readErr)
 	require.NotEmpty(t, content)
+	info, statErr := os.Stat(recording.Path)
+	require.NoError(t, statErr)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 
 	recorder.mu.Lock()
 	isRecording := recorder.recording

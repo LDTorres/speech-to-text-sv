@@ -122,7 +122,7 @@ func TestClipboard_Copy_OnX11_WithoutXclip_SucceedsWhenDirectTypingIsAvailable(t
 	err := clipboard.Copy(context.Background(), "hello deck")
 
 	require.NoError(t, err)
-	require.Len(t, clipboard.executed, 0)
+	require.Empty(t, clipboard.executed)
 	require.Equal(t, "hello deck", clipboard.lastText)
 }
 

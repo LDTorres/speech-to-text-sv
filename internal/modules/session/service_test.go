@@ -241,6 +241,30 @@ func TestSessionService_RetryLastPaste_NoTranscript_ReturnsError(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoTranscript)
 }
 
+func TestSessionService_ConcurrentStartAndStop_ReturnsBusyWithoutReordering(t *testing.T) {
+	t.Parallel()
+
+	recorder := &blockingRecorder{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	service := NewService(zap.NewNop(), recorder, &fakeTranscriber{}, &fakeClipboard{}, notify.NewNoop())
+
+	startDone := make(chan error, 1)
+	go func() { startDone <- service.StartRecording(context.Background()) }()
+
+	select {
+	case <-recorder.started:
+	case <-time.After(time.Second):
+		t.Fatal("recorder start did not begin")
+	}
+
+	require.ErrorIs(t, service.StopRecordingAndProcess(context.Background()), ErrBusy)
+	close(recorder.release)
+	require.NoError(t, <-startDone)
+	require.Equal(t, StateRecording, service.Status(context.Background()).State)
+}
+
 func TestSessionService_StartRecording_DuringProcessing_ReturnsBusy(t *testing.T) {
 	t.Parallel()
 
@@ -277,6 +301,26 @@ func TestSessionService_StartRecording_DuringProcessing_ReturnsBusy(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("stop processing did not complete")
 	}
+}
+
+type blockingRecorder struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingRecorder) Start(ctx context.Context) error {
+	r.once.Do(func() { close(r.started) })
+	select {
+	case <-r.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *blockingRecorder) Stop(ctx context.Context) (audio.Recording, error) {
+	return audio.Recording{}, audio.ErrNotRecording
 }
 
 type fakeRecorder struct {

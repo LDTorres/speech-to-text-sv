@@ -18,7 +18,7 @@ func TestModelSourceFromValues_UsesConfiguredRevisionAndChecksums(t *testing.T) 
 
 	require.Equal(t, "frozen-revision", source.revision)
 	require.Equal(t, "abc123", source.checksums["small"])
-	require.Empty(t, source.checksums["base"])
+	require.Equal(t, defaultModelSHA256Base, source.checksums["base"])
 }
 
 func TestVerifyModelChecksum_RejectsUnexpectedContent(t *testing.T) {
@@ -27,4 +27,16 @@ func TestVerifyModelChecksum_RejectsUnexpectedContent(t *testing.T) {
 
 	expected := sha256.Sum256([]byte("other-model"))
 	require.Error(t, verifyModelChecksum(path, fmt.Sprintf("%x", expected)))
+}
+
+func TestInferModelName_RecognizesLarge(t *testing.T) {
+	require.Equal(t, "large", inferModelName("/tmp/models/ggml-large.bin"))
+}
+
+func TestModelCatalog_ContainsWeightsAndWarnings(t *testing.T) {
+	large, ok := ModelInfoFor("large")
+	require.True(t, ok)
+	require.Equal(t, "ggml-large-v3.bin", large.FileName)
+	require.Equal(t, "3.1 GB", large.DisplaySize)
+	require.NotEmpty(t, large.ResourceWarning)
 }

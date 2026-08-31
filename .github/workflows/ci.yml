@@ -21,16 +21,37 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install script tooling
-        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+      - name: Install build and script tooling
+        run: sudo apt-get update && sudo apt-get install --yes libx11-dev shellcheck
 
       - name: Test Go packages
-        run: go test ./...
+        run: go test ./cmd/... ./internal/...
+
+      - name: Test Go packages with race detector
+        run: go test -race ./cmd/... ./internal/...
+
+      - name: Test X11 hotkey build
+        run: go test -race -tags x11hotkey ./cmd/... ./internal/...
+
+      - name: Vet Go packages
+        run: go vet ./cmd/... ./internal/...
+
+      - name: Run golangci-lint
+        run: make lint
+
+      - name: Run govulncheck
+        run: make vulncheck
 
       - name: Validate shell scripts
         run: |
           bash -n scripts/*.sh scripts/lib/*.sh
           shellcheck scripts/*.sh scripts/lib/*.sh
+
+      - name: Test installation lifecycle
+        run: ./scripts/test-lifecycle.sh
+
+      - name: Test release bootstrap
+        run: ./scripts/test-bootstrap.sh
 
       - name: Build release archive
         env:
@@ -49,3 +70,20 @@ jobs:
           path: |
             dist/release/*.tar.gz
             dist/release/*.sha256
+
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test Go packages
+        run: go test ./cmd/... ./internal/...
+
+      - name: Test Go packages with race detector
+        run: go test -race ./cmd/... ./internal/...

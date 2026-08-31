@@ -15,7 +15,13 @@ func newTriggerSource(resolved config.ResolvedPlatform) trigger.Source {
 
 func newRecorder(cfg config.AudioConfig, resolved config.ResolvedPlatform) audio.Recorder {
 	if resolved.Audio.Backend == config.AudioBackendPWRecord {
-		return linuxplatform.NewPWRecordRecorder(cfg.TempDir, cfg.FileName, resolved.Audio.InputDevice)
+		return linuxplatform.NewPWRecordRecorderWithWake(
+			cfg.TempDir,
+			cfg.FileName,
+			resolved.Audio.InputDevice,
+			resolved.Audio.CameraWake,
+			resolved.Audio.CameraVideoDevice,
+		)
 	}
 
 	return audio.NewFileRecorder(cfg.TempDir, cfg.FileName, cfg.SampleFormat)

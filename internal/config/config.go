@@ -1,13 +1,14 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
-
-	"github.com/kelseyhightower/envconfig"
 )
 
 type Config struct {
@@ -44,6 +45,8 @@ const (
 const (
 	AudioBackendMacOSCapture = "macos_capture"
 	AudioBackendPWRecord     = "pw-record"
+	AudioWakeAuto            = "auto"
+	AudioWakeNone            = "none"
 )
 
 const (
@@ -80,10 +83,12 @@ type ExternalControlConfig struct {
 }
 
 type AudioConfig struct {
-	TempDir      string `envconfig:"TEMP_DIR" default:"/tmp/sttd"`
-	FileName     string `envconfig:"FILE_NAME" default:"last-recording.wav"`
-	SampleFormat string `envconfig:"SAMPLE_FORMAT" default:"wav"`
-	InputDevice  string `envconfig:"INPUT_DEVICE" default:""`
+	TempDir           string `envconfig:"TEMP_DIR" default:"/tmp/sttd"`
+	FileName          string `envconfig:"FILE_NAME" default:"last-recording.wav"`
+	SampleFormat      string `envconfig:"SAMPLE_FORMAT" default:"wav"`
+	InputDevice       string `envconfig:"INPUT_DEVICE" default:""`
+	CameraWake        string `envconfig:"CAMERA_WAKE" default:"auto"`
+	CameraVideoDevice string `envconfig:"CAMERA_VIDEO_DEVICE" default:""`
 }
 
 type TranscribeConfig struct {
@@ -128,8 +133,10 @@ type ResolvedHotkey struct {
 }
 
 type ResolvedAudio struct {
-	Backend     string
-	InputDevice string
+	Backend           string
+	InputDevice       string
+	CameraWake        string
+	CameraVideoDevice string
 }
 
 type ResolvedClipboard struct {
@@ -139,47 +146,116 @@ type ResolvedClipboard struct {
 }
 
 func Load() (Config, error) {
-	cfg := Config{}
-
-	if err := loadDotEnvFile(".env"); err != nil {
+	dotEnvValues, err := ReadEnvFile(".env")
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Config{}, fmt.Errorf("load .env: %w", err)
 	}
-
-	if err := envconfig.Process("STTD_PLATFORM", &cfg.Platform); err != nil {
-		return Config{}, fmt.Errorf("load platform config: %w", err)
+	if dotEnvValues == nil {
+		dotEnvValues = map[string]string{}
 	}
 
-	if err := envconfig.Process("STTD_APP", &cfg.App); err != nil {
+	value := func(key, fallback string) string {
+		if processValue, ok := os.LookupEnv(key); ok {
+			return processValue
+		}
+		if fileValue, ok := dotEnvValues[key]; ok {
+			return fileValue
+		}
+		return fallback
+	}
+	parseDuration := func(key string, fallback time.Duration) (time.Duration, error) {
+		raw := value(key, "")
+		if strings.TrimSpace(raw) == "" {
+			return fallback, nil
+		}
+		parsed, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil {
+			return 0, fmt.Errorf("%s: %w", key, err)
+		}
+		return parsed, nil
+	}
+	parseBool := func(key string, fallback bool) (bool, error) {
+		raw := value(key, "")
+		if strings.TrimSpace(raw) == "" {
+			return fallback, nil
+		}
+		parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return false, fmt.Errorf("%s: %w", key, err)
+		}
+		return parsed, nil
+	}
+
+	appShutdownTimeout, err := parseDuration("STTD_APP_SHUTDOWN_TIMEOUT", 5*time.Second)
+	if err != nil {
 		return Config{}, fmt.Errorf("load app config: %w", err)
 	}
-
-	if err := envconfig.Process("STTD_TRIGGER", &cfg.Trigger); err != nil {
+	triggerDoubleTapWindow, err := parseDuration("STTD_TRIGGER_DOUBLE_TAP_WINDOW", 400*time.Millisecond)
+	if err != nil {
 		return Config{}, fmt.Errorf("load trigger config: %w", err)
 	}
-
-	if err := envconfig.Process("STTD_TRIGGER_HOTKEY", &cfg.Trigger.Hotkey); err != nil {
-		return Config{}, fmt.Errorf("load trigger hotkey config: %w", err)
+	transcribeTimeout, err := parseDuration("STTD_TRANSCRIBE_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, fmt.Errorf("load transcribe config: %w", err)
 	}
-
-	cfg.ExternalControl.enabledSet = hasEnvKey("STTD_EXTERNAL_CONTROL_ENABLED")
-	if err := envconfig.Process("STTD_EXTERNAL_CONTROL", &cfg.ExternalControl); err != nil {
+	clipboardTimeout, err := parseDuration("STTD_CLIPBOARD_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, fmt.Errorf("load clipboard config: %w", err)
+	}
+	pasteEnabled, err := parseBool("STTD_CLIPBOARD_ENABLE_PASTE", true)
+	if err != nil {
+		return Config{}, fmt.Errorf("load clipboard config: %w", err)
+	}
+	notifyEnabled, err := parseBool("STTD_NOTIFY_ENABLED", false)
+	if err != nil {
+		return Config{}, fmt.Errorf("load notify config: %w", err)
+	}
+	externalControlEnabled, err := parseBool("STTD_EXTERNAL_CONTROL_ENABLED", false)
+	if err != nil {
 		return Config{}, fmt.Errorf("load external control config: %w", err)
 	}
 
-	if err := envconfig.Process("STTD_AUDIO", &cfg.Audio); err != nil {
-		return Config{}, fmt.Errorf("load audio config: %w", err)
-	}
-
-	if err := envconfig.Process("STTD_TRANSCRIBE", &cfg.Transcribe); err != nil {
-		return Config{}, fmt.Errorf("load transcribe config: %w", err)
-	}
-
-	if err := envconfig.Process("STTD_CLIPBOARD", &cfg.Clipboard); err != nil {
-		return Config{}, fmt.Errorf("load clipboard config: %w", err)
-	}
-
-	if err := envconfig.Process("STTD_NOTIFY", &cfg.Notify); err != nil {
-		return Config{}, fmt.Errorf("load notify config: %w", err)
+	cfg := Config{
+		Platform: PlatformConfig{
+			Profile:     PlatformProfile(value("STTD_PLATFORM_PROFILE", string(PlatformProfileLinux))),
+			Integration: PlatformIntegration(value("STTD_PLATFORM_INTEGRATION", string(PlatformIntegrationNone))),
+		},
+		App: AppConfig{
+			Environment:     value("STTD_APP_ENV", "development"),
+			ShutdownTimeout: appShutdownTimeout,
+		},
+		Trigger: TriggerConfig{
+			Mode:            value("STTD_TRIGGER_MODE", ""),
+			DoubleTapWindow: triggerDoubleTapWindow,
+			Hotkey: HotkeyConfig{
+				Modifiers: value("STTD_TRIGGER_HOTKEY_MODIFIERS", ""),
+				Key:       value("STTD_TRIGGER_HOTKEY_KEY", ""),
+			},
+		},
+		ExternalControl: ExternalControlConfig{
+			Enabled:    externalControlEnabled,
+			SocketPath: value("STTD_EXTERNAL_CONTROL_SOCKET_PATH", ""),
+			enabledSet: hasValue(dotEnvValues, "STTD_EXTERNAL_CONTROL_ENABLED") || hasEnvKey("STTD_EXTERNAL_CONTROL_ENABLED"),
+		},
+		Audio: AudioConfig{
+			TempDir:           value("STTD_AUDIO_TEMP_DIR", "/tmp/sttd"),
+			FileName:          value("STTD_AUDIO_FILE_NAME", "last-recording.wav"),
+			SampleFormat:      value("STTD_AUDIO_SAMPLE_FORMAT", "wav"),
+			InputDevice:       value("STTD_AUDIO_INPUT_DEVICE", ""),
+			CameraWake:        value("STTD_AUDIO_CAMERA_WAKE", "auto"),
+			CameraVideoDevice: value("STTD_AUDIO_CAMERA_VIDEO_DEVICE", ""),
+		},
+		Transcribe: TranscribeConfig{
+			BinaryPath: value("STTD_TRANSCRIBE_BINARY_PATH", ""),
+			ModelPath:  value("STTD_TRANSCRIBE_MODEL_PATH", ""),
+			Language:   value("STTD_TRANSCRIBE_LANGUAGE", "es"),
+			Timeout:    transcribeTimeout,
+		},
+		Clipboard: ClipboardConfig{
+			EnablePaste: pasteEnabled,
+			Timeout:     clipboardTimeout,
+		},
+		Notify: NotifyConfig{Enabled: notifyEnabled},
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -223,13 +299,29 @@ func (c Config) validate() error {
 	if c.ExternalControl.SocketPath != "" && strings.TrimSpace(c.ExternalControl.SocketPath) == "" {
 		return fmt.Errorf("invalid configuration: external control socket path must not be blank")
 	}
-
-	if c.Audio.TempDir == "" {
-		return fmt.Errorf("invalid configuration: audio temp dir is required")
+	if strings.TrimSpace(c.ExternalControl.SocketPath) != "" {
+		if !filepath.IsAbs(strings.TrimSpace(c.ExternalControl.SocketPath)) {
+			return fmt.Errorf("invalid configuration: external control socket path must be absolute")
+		}
 	}
 
-	if c.Audio.FileName == "" {
+	if strings.TrimSpace(c.Audio.TempDir) == "" {
+		return fmt.Errorf("invalid configuration: audio temp dir is required")
+	}
+	if !filepath.IsAbs(strings.TrimSpace(c.Audio.TempDir)) {
+		return fmt.Errorf("invalid configuration: audio temp dir must be absolute")
+	}
+
+	fileName := strings.TrimSpace(c.Audio.FileName)
+	if fileName == "" {
 		return fmt.Errorf("invalid configuration: audio file name is required")
+	}
+	if filepath.Base(fileName) != fileName || fileName == "." || fileName == ".." {
+		return fmt.Errorf("invalid configuration: audio file name must be a simple file name")
+	}
+
+	if c.Audio.CameraWake != "" && c.Audio.CameraWake != AudioWakeAuto && c.Audio.CameraWake != AudioWakeNone {
+		return fmt.Errorf("invalid configuration: unsupported audio camera wake mode %q", c.Audio.CameraWake)
 	}
 
 	if c.Transcribe.Timeout <= 0 {
@@ -280,6 +372,12 @@ func (c Config) ResolvePlatform(goos string) (ResolvedPlatform, error) {
 
 	if c.Audio.InputDevice != "" {
 		resolved.Audio.InputDevice = c.Audio.InputDevice
+	}
+	if c.Audio.CameraWake != "" {
+		resolved.Audio.CameraWake = c.Audio.CameraWake
+	}
+	if c.Audio.CameraVideoDevice != "" {
+		resolved.Audio.CameraVideoDevice = strings.TrimSpace(c.Audio.CameraVideoDevice)
 	}
 
 	if c.ExternalControl.enabledSet {
@@ -358,8 +456,10 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 				Enabled: false,
 			},
 			Audio: ResolvedAudio{
-				Backend:     AudioBackendMacOSCapture,
-				InputDevice: "",
+				Backend:           AudioBackendMacOSCapture,
+				InputDevice:       "",
+				CameraWake:        AudioWakeNone,
+				CameraVideoDevice: "",
 			},
 			Clipboard: ResolvedClipboard{
 				TargetOS:       "darwin",
@@ -383,8 +483,10 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 				Enabled: true,
 			},
 			Audio: ResolvedAudio{
-				Backend:     AudioBackendPWRecord,
-				InputDevice: "",
+				Backend:           AudioBackendPWRecord,
+				InputDevice:       "",
+				CameraWake:        AudioWakeAuto,
+				CameraVideoDevice: "",
 			},
 			Clipboard: ResolvedClipboard{
 				TargetOS:       "linux",
@@ -408,8 +510,10 @@ func defaultsForProfile(profile PlatformProfile) ResolvedPlatform {
 				Enabled: false,
 			},
 			Audio: ResolvedAudio{
-				Backend:     AudioBackendPWRecord,
-				InputDevice: "",
+				Backend:           AudioBackendPWRecord,
+				InputDevice:       "",
+				CameraWake:        AudioWakeAuto,
+				CameraVideoDevice: "",
 			},
 			Clipboard: ResolvedClipboard{
 				TargetOS:       "linux",
@@ -498,5 +602,10 @@ func normalizeHotkeyKey(value string) (string, error) {
 
 func hasEnvKey(key string) bool {
 	_, ok := os.LookupEnv(key)
+	return ok
+}
+
+func hasValue(values map[string]string, key string) bool {
+	_, ok := values[key]
 	return ok
 }

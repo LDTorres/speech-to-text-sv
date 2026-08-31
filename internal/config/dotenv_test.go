@@ -22,6 +22,19 @@ func TestConfigLoad_ReadsDotEnvFromWorkingDirectory(t *testing.T) {
 	require.Equal(t, "/tmp/model-from-dotenv.bin", cfg.Transcribe.ModelPath)
 }
 
+func TestConfigLoad_DoesNotMutateProcessEnvironment(t *testing.T) {
+	tempDir := t.TempDir()
+	writeDotEnv(t, tempDir, "STTD_APP_ENV=test-from-dotenv\n")
+	withWorkingDir(t, tempDir)
+	withUnsetEnv(t, "STTD_APP_ENV")
+
+	_, err := Load()
+	require.NoError(t, err)
+
+	_, exists := os.LookupEnv("STTD_APP_ENV")
+	require.False(t, exists)
+}
+
 func TestConfigLoad_ProcessEnvironmentOverridesDotEnv(t *testing.T) {
 	tempDir := t.TempDir()
 	writeDotEnv(t, tempDir, "STTD_TRANSCRIBE_BINARY_PATH=/tmp/from-dotenv\n")
@@ -34,7 +47,7 @@ func TestConfigLoad_ProcessEnvironmentOverridesDotEnv(t *testing.T) {
 	require.Equal(t, "/tmp/from-process-env", cfg.Transcribe.BinaryPath)
 }
 
-func writeDotEnv(t *testing.T, dir string, content string) {
+func writeDotEnv(t *testing.T, dir, content string) {
 	t.Helper()
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0o644))

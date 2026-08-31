@@ -85,17 +85,16 @@ parse_args() {
         RELEASE_VERSION="$2"
         shift 2
         ;;
-      --title)
-        RELEASE_TITLE="$2"
-        shift 2
-        ;;
-      --notes)
-        NOTES_TEXT="$2"
-        GENERATE_NOTES=false
-        shift 2
-        ;;
-      --notes-file)
-        NOTES_FILE="$2"
+      --title|--notes|--notes-file)
+        if [[ $# -lt 2 ]]; then
+          printf 'missing value for %s\n' "$1" >&2
+          exit 1
+        fi
+        case "$1" in
+          --title) RELEASE_TITLE="$2" ;;
+          --notes) NOTES_TEXT="$2" ;;
+          --notes-file) NOTES_FILE="$2" ;;
+        esac
         GENERATE_NOTES=false
         shift 2
         ;;
@@ -183,6 +182,8 @@ resolve_release_repo() {
   fi
 
   remote_url="${remote_url%.git}"
+  remote_url="${remote_url#ssh://git@github.com/}"
+  remote_url="${remote_url#ssh://github.com/}"
   remote_url="${remote_url#git@github.com:}"
   remote_url="${remote_url#https://github.com/}"
   remote_url="${remote_url#http://github.com/}"

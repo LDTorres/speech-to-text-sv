@@ -74,7 +74,7 @@ type TriggerWatcher struct {
 	done   chan struct{}
 }
 
-func NewWatcher(logger *zap.Logger, source Source, sourceName string, mode string, doubleTapWindow time.Duration) *TriggerWatcher {
+func NewWatcher(logger *zap.Logger, source Source, sourceName, mode string, doubleTapWindow time.Duration) *TriggerWatcher {
 	return &TriggerWatcher{
 		logger:          logger,
 		source:          source,
@@ -107,6 +107,7 @@ func (w *TriggerWatcher) Start(ctx context.Context) error {
 
 	w.cancel = cancel
 	w.done = done
+	w.events = make(chan Event, 8)
 
 	go w.run(runCtx, done)
 
@@ -153,13 +154,48 @@ func (w *TriggerWatcher) run(ctx context.Context, done chan struct{}) {
 
 	var lastPressAt time.Time
 	var toggleActive bool
+	var pendingToggle *SourceEvent
+	var toggleTimer *time.Timer
+	var toggleTimerC <-chan time.Time
+	defer func() {
+		if toggleTimer != nil {
+			toggleTimer.Stop()
+		}
+	}()
+
+	stopToggleTimer := func() {
+		if toggleTimer != nil {
+			toggleTimer.Stop()
+		}
+		toggleTimer = nil
+		toggleTimerC = nil
+	}
+	flushTogglePress := func() bool {
+		if pendingToggle == nil {
+			return true
+		}
+		event := *pendingToggle
+		pendingToggle = nil
+		stopToggleTimer()
+		toggleActive = true
+		return w.emit(ctx, Event{
+			Kind:     EventPress,
+			At:       event.At,
+			Metadata: event.Metadata,
+		})
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-toggleTimerC:
+			if !flushTogglePress() {
+				return
+			}
 		case rawEvent, ok := <-w.source.Events():
 			if !ok {
+				close(w.events)
 				return
 			}
 
@@ -171,19 +207,48 @@ func (w *TriggerWatcher) run(ctx context.Context, done chan struct{}) {
 			switch rawEvent.Kind {
 			case SourceEventPress:
 				if w.mode == modeToggle {
-					eventKind := EventPress
 					if toggleActive {
-						eventKind = EventRelease
+						toggleActive = false
+						if !w.emit(ctx, Event{
+							Kind:     EventRelease,
+							At:       eventAt,
+							Metadata: rawEvent.Metadata,
+						}) {
+							return
+						}
+						continue
 					}
 
-					toggleActive = !toggleActive
-					if !w.emit(ctx, Event{
-						Kind:     eventKind,
-						At:       eventAt,
-						Metadata: rawEvent.Metadata,
-					}) {
-						return
+					if pendingToggle != nil {
+						if w.isDoubleTap(pendingToggle.At, eventAt) {
+							pendingToggle = nil
+							stopToggleTimer()
+							if !w.emit(ctx, Event{
+								Kind:     EventDoubleTap,
+								At:       eventAt,
+								Metadata: rawEvent.Metadata,
+							}) {
+								return
+							}
+							continue
+						}
+						if !flushTogglePress() {
+							return
+						}
+						toggleActive = false
+						if !w.emit(ctx, Event{
+							Kind:     EventRelease,
+							At:       eventAt,
+							Metadata: rawEvent.Metadata,
+						}) {
+							return
+						}
+						continue
 					}
+
+					pendingToggle = &SourceEvent{Kind: SourceEventPress, At: eventAt, Metadata: rawEvent.Metadata}
+					toggleTimer = time.NewTimer(w.doubleTapWindow)
+					toggleTimerC = toggleTimer.C
 					continue
 				}
 
@@ -233,7 +298,7 @@ func (w *TriggerWatcher) emit(ctx context.Context, event Event) bool {
 	}
 }
 
-func (w *TriggerWatcher) isDoubleTap(lastPressAt time.Time, eventAt time.Time) bool {
+func (w *TriggerWatcher) isDoubleTap(lastPressAt, eventAt time.Time) bool {
 	if lastPressAt.IsZero() || eventAt.Before(lastPressAt) {
 		return false
 	}

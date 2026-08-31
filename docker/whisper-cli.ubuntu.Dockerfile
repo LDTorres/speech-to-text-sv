@@ -3,6 +3,7 @@ FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG WHISPER_CPP_VERSION=v1.8.4
+ARG WHISPER_CPP_COMMIT=9386f239401074690479731c1e41683fbbeac557
 ARG WHISPER_ACCELERATION=cpu
 ARG WHISPER_CUDA_ARCHITECTURES=
 ARG WHISPER_BUILD_JOBS=2
@@ -17,7 +18,10 @@ RUN apt-get update && \
 
 WORKDIR /opt
 
-RUN git clone --branch "${WHISPER_CPP_VERSION}" --depth 1 https://github.com/ggml-org/whisper.cpp.git
+RUN git clone --branch "${WHISPER_CPP_VERSION}" --depth 1 https://github.com/ggml-org/whisper.cpp.git && \
+    if [ -n "${WHISPER_CPP_COMMIT}" ]; then \
+      test "$(git -C /opt/whisper.cpp rev-parse HEAD)" = "${WHISPER_CPP_COMMIT}"; \
+    fi
 
 WORKDIR /opt/whisper.cpp
 

@@ -2,7 +2,7 @@
 
 sttd_version_core() {
   local tag="$1"
-  if [[ "${tag}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$ ]]; then
+  if [[ "${tag}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)([-+][0-9A-Za-z.-]+)?$ ]]; then
     printf '%s %s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
   fi
 }
@@ -51,11 +51,11 @@ sttd_next_version() {
 
 sttd_normalize_version() {
   local version="$1"
-  if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]]; then
+  if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
     version="v${version}"
   fi
 
-  if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]]; then
+  if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
     printf 'invalid release version: %s\n' "${version}" >&2
     return 1
   fi

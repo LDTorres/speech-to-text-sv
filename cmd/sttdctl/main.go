@@ -8,18 +8,26 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/LDTorres/speech-to-text-sv/internal/admin"
 	"github.com/LDTorres/speech-to-text-sv/internal/modules/control"
 )
 
-const socketTimeout = 5 * time.Second
+const (
+	socketTimeout         = 5 * time.Second
+	configApplyTimeout    = 10 * time.Minute
+	serviceCommandTimeout = 30 * time.Second
+)
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	if err := run(ctx, os.Args[1:]); err != nil {
 		writeError(err)
@@ -29,7 +37,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: sttdctl <control|config|service> ...")
+		return fmt.Errorf("usage: sttdctl <control|config|service|model|doctor> ...")
 	}
 
 	switch args[0] {
@@ -39,11 +47,55 @@ func run(ctx context.Context, args []string) error {
 		return runConfig(ctx, args[1:])
 	case "service":
 		return runService(ctx, args[1:])
+	case "model":
+		return runModel(args[1:])
+	case "doctor":
+		return runDoctor(ctx, args[1:])
 	case "logs":
 		return runLogs(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown command group %q", args[0])
 	}
+}
+
+func runModel(args []string) error {
+	if len(args) < 1 || args[0] != "list" {
+		return fmt.Errorf("usage: sttdctl model list [--json]")
+	}
+
+	fs := flag.NewFlagSet("model list", flag.ContinueOnError)
+	jsonOut := fs.Bool("json", false, "output JSON")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	catalog := admin.ModelCatalog()
+	if *jsonOut {
+		return writeJSON(catalog)
+	}
+	for _, info := range catalog {
+		fmt.Printf("%s - %s - %s\n", info.Name, info.DisplaySize, info.ResourceWarning)
+	}
+	return nil
+}
+
+func runDoctor(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("usage: sttdctl doctor")
+	}
+
+	executablePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve sttdctl path: %w", err)
+	}
+	doctorPath := filepath.Join(filepath.Dir(executablePath), "doctor.sh")
+	cmd := exec.CommandContext(ctx, doctorPath, "--status") // #nosec G204 -- doctorPath is derived from the executable directory
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run doctor: %w", err)
+	}
+
+	return nil
 }
 
 func runControl(ctx context.Context, args []string) error {
@@ -87,11 +139,31 @@ func runControl(ctx context.Context, args []string) error {
 	}
 
 	if *jsonOut {
-		return writeJSON(response)
+		if err := writeJSON(response); err != nil {
+			return err
+		}
+		if !response.OK {
+			return responseError(response)
+		}
+		return nil
 	}
 
+	if !response.OK {
+		return responseError(response)
+	}
 	fmt.Println(response.Message)
 	return nil
+}
+
+func responseError(response control.Response) error {
+	message := strings.TrimSpace(response.Message)
+	if message == "" {
+		message = "control request failed"
+	}
+	if code := strings.TrimSpace(response.ErrorCode); code != "" {
+		return fmt.Errorf("%s: %s", code, message)
+	}
+	return errors.New(message)
 }
 
 func runConfig(ctx context.Context, args []string) error {
@@ -162,7 +234,9 @@ func runConfig(ctx context.Context, args []string) error {
 			input.SocketPath = socketPath
 		}
 
-		result, err := admin.ApplyDaemonConfig(ctx, install, input)
+		applyCtx, cancel := context.WithTimeout(ctx, configApplyTimeout)
+		defer cancel()
+		result, err := admin.ApplyDaemonConfig(applyCtx, install, input)
 		if err != nil {
 			return err
 		}
@@ -177,6 +251,9 @@ func runConfig(ctx context.Context, args []string) error {
 }
 
 func runService(ctx context.Context, args []string) error {
+	serviceCtx, cancel := context.WithTimeout(ctx, serviceCommandTimeout)
+	defer cancel()
+
 	if len(args) < 1 {
 		return fmt.Errorf("usage: sttdctl service <status|restart> [--json]")
 	}
@@ -188,7 +265,7 @@ func runService(ctx context.Context, args []string) error {
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		status, err := admin.GetServiceStatus(ctx)
+		status, err := admin.GetServiceStatus(serviceCtx)
 		if err != nil {
 			return err
 		}
@@ -203,10 +280,10 @@ func runService(ctx context.Context, args []string) error {
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		if err := admin.RestartService(ctx); err != nil {
+		if err := admin.RestartService(serviceCtx); err != nil {
 			return err
 		}
-		status, err := admin.GetServiceStatus(ctx)
+		status, err := admin.GetServiceStatus(serviceCtx)
 		if err != nil {
 			return err
 		}
@@ -234,7 +311,7 @@ func runLogs(ctx context.Context, args []string) error {
 			return err
 		}
 
-		tail, err := admin.TailLogLines(*lines)
+		tail, err := admin.TailJournalLines(ctx, *lines)
 		if err != nil {
 			return err
 		}
@@ -279,6 +356,14 @@ func sendControlRequest(ctx context.Context, socketPath string, request control.
 		_ = conn.Close()
 	}()
 
+	deadline := time.Now().Add(socketTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return control.Response{}, fmt.Errorf("set control connection deadline: %w", err)
+	}
+
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return control.Response{}, fmt.Errorf("encode control request: %w", err)
@@ -300,7 +385,7 @@ func sendControlRequest(ctx context.Context, socketPath string, request control.
 
 func parseBoolFlag(value string) (bool, error) {
 	normalized := strings.TrimSpace(value)
-	switch normalized {
+	switch strings.ToLower(normalized) {
 	case "true":
 		return true, nil
 	case "false":

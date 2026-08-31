@@ -61,8 +61,9 @@ type SessionService struct {
 	clipboard   clipboard.Clipboard
 	notifier    notify.Notifier
 
-	mu    sync.Mutex
-	state state
+	mu        sync.Mutex
+	operation chan struct{}
+	state     state
 }
 
 func NewService(
@@ -78,6 +79,7 @@ func NewService(
 		transcriber: transcriber,
 		clipboard:   clipboard,
 		notifier:    notifier,
+		operation:   make(chan struct{}, 1),
 		state: state{
 			current: StateIdle,
 		},
@@ -85,6 +87,15 @@ func NewService(
 }
 
 func (s *SessionService) StartRecording(ctx context.Context) error {
+	if err := s.acquireOperation(ctx); err != nil {
+		return err
+	}
+	defer s.releaseOperation()
+
+	return s.startRecording(ctx)
+}
+
+func (s *SessionService) startRecording(ctx context.Context) error {
 	s.logger.Info("recording start requested")
 
 	if err := s.transitionToRecording(); err != nil {
@@ -96,13 +107,22 @@ func (s *SessionService) StartRecording(ctx context.Context) error {
 		return fmt.Errorf("start recording: %w", err)
 	}
 
-	_ = s.notifier.Notify(ctx, "recording started")
+	s.notify(ctx, "recording started")
 	s.logger.Info("recording started")
 
 	return nil
 }
 
 func (s *SessionService) StopRecordingAndProcess(ctx context.Context) error {
+	if err := s.acquireOperation(ctx); err != nil {
+		return err
+	}
+	defer s.releaseOperation()
+
+	return s.stopRecordingAndProcess(ctx)
+}
+
+func (s *SessionService) stopRecordingAndProcess(ctx context.Context) error {
 	s.logger.Info("recording stop requested")
 
 	if err := s.transitionToProcessing(); err != nil {
@@ -114,6 +134,14 @@ func (s *SessionService) StopRecordingAndProcess(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("stop recording: %w", err)
 	}
+	defer func() {
+		if recording.Path == "" {
+			return
+		}
+		if err := os.Remove(recording.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.logger.Warn("remove audio recording", zap.String("recording_path", recording.Path), zap.Error(err))
+		}
+	}()
 
 	fields := s.recordingLogFields(recording)
 	s.logger.Info("recording finalized", fields...)
@@ -123,7 +151,7 @@ func (s *SessionService) StopRecordingAndProcess(ctx context.Context) error {
 	if err != nil {
 		s.clearTranscript()
 		s.logger.Error("transcription failed", append(fields, zap.Error(err))...)
-		return fmt.Errorf("%w: %s", ErrTranscriptionFailed, err)
+		return fmt.Errorf("%w: %w", ErrTranscriptionFailed, err)
 	}
 
 	s.storeTranscript(transcript.Text)
@@ -142,10 +170,10 @@ func (s *SessionService) StopRecordingAndProcess(ctx context.Context) error {
 
 	if err := s.clipboard.Paste(ctx); err != nil {
 		s.logger.Error("paste transcript failed", append(fields, zap.Error(err), zap.Int("transcript_length", len(transcript.Text)))...)
-		return fmt.Errorf("%w: %s", ErrPasteFailed, err)
+		return fmt.Errorf("%w: %w", ErrPasteFailed, err)
 	}
 
-	_ = s.notifier.Notify(ctx, "transcript pasted")
+	s.notify(ctx, "transcript pasted")
 	s.logger.Info(
 		"session completed",
 		zap.Duration("transcription_duration", transcript.Duration),
@@ -156,11 +184,16 @@ func (s *SessionService) StopRecordingAndProcess(ctx context.Context) error {
 }
 
 func (s *SessionService) ToggleRecording(ctx context.Context) error {
+	if err := s.acquireOperation(ctx); err != nil {
+		return err
+	}
+	defer s.releaseOperation()
+
 	switch s.Status(ctx).State {
 	case StateIdle:
-		return s.StartRecording(ctx)
+		return s.startRecording(ctx)
 	case StateRecording:
-		return s.StopRecordingAndProcess(ctx)
+		return s.stopRecordingAndProcess(ctx)
 	case StateProcessing:
 		return ErrBusy
 	default:
@@ -169,6 +202,11 @@ func (s *SessionService) ToggleRecording(ctx context.Context) error {
 }
 
 func (s *SessionService) RetryLastPaste(ctx context.Context) error {
+	if err := s.acquireOperation(ctx); err != nil {
+		return err
+	}
+	defer s.releaseOperation()
+
 	status := s.Status(ctx)
 	if status.State == StateProcessing {
 		return ErrBusy
@@ -187,13 +225,36 @@ func (s *SessionService) RetryLastPaste(ctx context.Context) error {
 	}
 
 	if err := s.clipboard.Paste(ctx); err != nil {
-		return fmt.Errorf("%w: %s", ErrPasteFailed, err)
+		return fmt.Errorf("%w: %w", ErrPasteFailed, err)
 	}
 
-	_ = s.notifier.Notify(ctx, "transcript pasted")
+	s.notify(ctx, "transcript pasted")
 	s.logger.Info("retry paste completed", zap.Int("transcript_length", len(transcript)))
 
 	return nil
+}
+
+func (s *SessionService) acquireOperation(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	select {
+	case s.operation <- struct{}{}:
+		return nil
+	default:
+		return ErrBusy
+	}
+}
+
+func (s *SessionService) releaseOperation() {
+	<-s.operation
+}
+
+func (s *SessionService) notify(ctx context.Context, message string) {
+	if err := s.notifier.Notify(ctx, message); err != nil {
+		s.logger.Warn("send session notification", zap.String("message", message), zap.Error(err))
+	}
 }
 
 func (s *SessionService) Status(ctx context.Context) Status {

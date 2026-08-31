@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,7 +47,7 @@ func DiscoverServiceInstall() (ServiceInstall, error) {
 	}
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", ServiceName)
-	file, err := os.Open(unitPath)
+	file, err := os.Open(unitPath) // #nosec G304 -- the unit path is derived from the current user's home
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ServiceInstall{}, ErrServiceUnavailable
@@ -125,32 +126,101 @@ func RestartService(ctx context.Context) error {
 	return nil
 }
 
+const (
+	maxTailReadBytes = 8 << 20
+	defaultTailLines = 1000
+)
+
 func TailLogLines(lines int) ([]string, error) {
 	path, err := LogFilePath()
 	if err != nil {
 		return nil, err
 	}
 
-	content, err := os.ReadFile(path)
+	file, err := os.Open(path) // #nosec G304 -- the path is derived from the current user's home
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return []string{}, nil
 		}
-		return nil, fmt.Errorf("read log file: %w", err)
+		return nil, fmt.Errorf("open log file: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	if lines <= 0 {
+		lines = defaultTailLines
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat log file: %w", err)
+	}
+	start := info.Size() - maxTailReadBytes
+	if start < 0 {
+		start = 0
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek log file: %w", err)
 	}
 
-	allLines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
-	filtered := make([]string, 0, len(allLines))
-	for _, line := range allLines {
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 1<<20)
+	if start > 0 {
+		_ = scanner.Scan()
+	}
+	filtered := make([]string, 0, lines)
+	for scanner.Scan() {
+		line := strings.TrimSuffix(scanner.Text(), "\r")
 		if line == "" {
+			continue
+		}
+		if len(filtered) == lines {
+			copy(filtered, filtered[1:])
+			filtered[len(filtered)-1] = line
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan log file: %w", err)
+	}
+
+	return filtered, nil
+}
+
+func TailJournalLines(ctx context.Context, lines int) ([]string, error) {
+	if lines <= 0 {
+		lines = defaultTailLines
+	}
+
+	//nolint:gosec // journalctl is fixed and the line count is an integer limit
+	cmd := exec.CommandContext(
+		ctx,
+		"journalctl",
+		"--user-unit",
+		ServiceName,
+		"--no-pager",
+		"--output=cat",
+		fmt.Sprintf("--lines=%d", lines),
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return TailLogLines(lines)
+	}
+	if len(output) > maxTailReadBytes {
+		return nil, errors.New("journal output exceeds maximum size")
+	}
+
+	filtered := make([]string, 0, lines)
+	for _, line := range strings.Split(strings.ReplaceAll(string(output), "\r\n", "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		if len(filtered) == lines {
+			copy(filtered, filtered[1:])
+			filtered[len(filtered)-1] = line
 			continue
 		}
 		filtered = append(filtered, line)
 	}
 
-	if lines <= 0 || len(filtered) <= lines {
-		return filtered, nil
-	}
-
-	return filtered[len(filtered)-lines:], nil
+	return filtered, nil
 }

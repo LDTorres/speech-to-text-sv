@@ -34,6 +34,7 @@ type Recorder struct {
 	inputDevice  string
 	factory      macCaptureFactory
 
+	operation sync.Mutex
 	mu        sync.Mutex
 	recording bool
 	startedAt time.Time
@@ -52,6 +53,9 @@ func NewRecorder(tempDir string, fileName string, sampleFormat string, inputDevi
 }
 
 func (r *Recorder) Start(ctx context.Context) error {
+	r.operation.Lock()
+	defer r.operation.Unlock()
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -90,11 +94,8 @@ func (r *Recorder) Start(ctx context.Context) error {
 }
 
 func (r *Recorder) Stop(ctx context.Context) (audio.Recording, error) {
-	select {
-	case <-ctx.Done():
-		return audio.Recording{}, ctx.Err()
-	default:
-	}
+	r.operation.Lock()
+	defer r.operation.Unlock()
 
 	r.mu.Lock()
 	if !r.recording || r.session == nil {
@@ -115,7 +116,7 @@ func (r *Recorder) Stop(ctx context.Context) (audio.Recording, error) {
 
 	if err := session.Stop(); err != nil {
 		_ = session.Close()
-		return audio.Recording{}, fmt.Errorf("stop mac audio capture: %w", err)
+		return recording, fmt.Errorf("stop mac audio capture: %w", err)
 	}
 	defer func() {
 		_ = session.Close()
@@ -127,7 +128,10 @@ func (r *Recorder) Stop(ctx context.Context) (audio.Recording, error) {
 	r.mu.Unlock()
 
 	if err := writePCMAsWAV(recording.Path, pcmData, session.SampleRate(), session.Channels()); err != nil {
-		return audio.Recording{}, err
+		return recording, err
+	}
+	if err := ctx.Err(); err != nil {
+		return recording, err
 	}
 
 	return recording, nil
@@ -250,13 +254,21 @@ func writePCMAsWAV(path string, pcmData []byte, sampleRate uint32, channels uint
 }
 
 func writeWAVFile(path string, pcmData []byte, sampleRate uint32, channels uint32, bitsPerSample uint16) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	outputDir := filepath.Dir(path)
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return fmt.Errorf("create audio temp dir: %w", err)
 	}
+	if err := os.Chmod(outputDir, 0o700); err != nil {
+		return fmt.Errorf("secure audio temp dir: %w", err)
+	}
 
-	file, err := os.Create(path)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create wav file: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("secure wav file: %w", err)
 	}
 	defer func() {
 		_ = file.Close()

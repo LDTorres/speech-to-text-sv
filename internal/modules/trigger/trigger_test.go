@@ -98,6 +98,23 @@ func TestTriggerWatcher_PressesOutsideWindow_DoNotEmitDoubleTap(t *testing.T) {
 	require.Equal(t, secondAt, secondEvent.At)
 }
 
+func TestTriggerWatcher_SourceClosureClosesEvents(t *testing.T) {
+	t.Parallel()
+
+	watcher, source := newTestWatcher(modeHold, 400*time.Millisecond)
+	require.NoError(t, watcher.Start(context.Background()))
+	close(source.events)
+
+	select {
+	case _, ok := <-watcher.Events():
+		require.False(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("watcher events did not close")
+	}
+
+	require.NoError(t, watcher.Stop(context.Background()))
+}
+
 func TestTriggerWatcher_Stop_UnblocksRunLoop(t *testing.T) {
 	t.Parallel()
 
@@ -122,7 +139,7 @@ func TestTriggerWatcher_Stop_UnblocksRunLoop(t *testing.T) {
 	require.Equal(t, 1, source.stopCalls())
 }
 
-func TestTriggerWatcher_ToggleMode_PressesAlternateBetweenStartAndStop(t *testing.T) {
+func TestTriggerWatcher_ToggleMode_TwoQuickPressesEmitDoubleTap(t *testing.T) {
 	t.Parallel()
 
 	watcher, source := newTestWatcher(modeToggle, 400*time.Millisecond)
@@ -140,9 +157,33 @@ func TestTriggerWatcher_ToggleMode_PressesAlternateBetweenStartAndStop(t *testin
 	source.emit(SourceEvent{Kind: SourceEventPress, At: secondAt})
 
 	firstEvent := readEvent(t, watcher.Events())
-	secondEvent := readEvent(t, watcher.Events())
 
+	require.Equal(t, EventDoubleTap, firstEvent.Kind)
+	require.Equal(t, secondAt, firstEvent.At)
+	select {
+	case event := <-watcher.Events():
+		t.Fatalf("unexpected event after double tap: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestTriggerWatcher_ToggleMode_PressesAlternateAfterWindow(t *testing.T) {
+	t.Parallel()
+
+	watcher, source := newTestWatcher(modeToggle, 10*time.Millisecond)
+	require.NoError(t, watcher.Start(context.Background()))
+	defer func() {
+		require.NoError(t, watcher.Stop(context.Background()))
+	}()
+
+	firstAt := time.Unix(450, 0).UTC()
+	source.emit(SourceEvent{Kind: SourceEventPress, At: firstAt})
+	firstEvent := readEvent(t, watcher.Events())
 	require.Equal(t, EventPress, firstEvent.Kind)
+
+	secondAt := firstAt.Add(time.Second)
+	source.emit(SourceEvent{Kind: SourceEventPress, At: secondAt})
+	secondEvent := readEvent(t, watcher.Events())
 	require.Equal(t, EventRelease, secondEvent.Kind)
 	require.Equal(t, secondAt, secondEvent.At)
 }

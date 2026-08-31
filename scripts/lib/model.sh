@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 
-STTD_SUPPORTED_MODELS=(tiny base small)
+STTD_SUPPORTED_MODELS=(tiny base small large)
 # shellcheck disable=SC2034
 STTD_DEFAULT_MODEL=base
-STTD_MODEL_REVISION="${STTD_MODEL_REVISION:-main}"
+STTD_DEFAULT_MODEL_REVISION=362722b3fdcd2300b58a8286933ead1c48619667
+STTD_MODEL_REVISION="${STTD_MODEL_REVISION:-${STTD_DEFAULT_MODEL_REVISION}}"
+STTD_MODEL_SHA256_TINY="${STTD_MODEL_SHA256_TINY:-be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21}"
+STTD_MODEL_SHA256_BASE="${STTD_MODEL_SHA256_BASE:-60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe}"
+STTD_MODEL_SHA256_SMALL="${STTD_MODEL_SHA256_SMALL:-1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b}"
+STTD_MODEL_SHA256_LARGE="${STTD_MODEL_SHA256_LARGE:-64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2}"
 
 sttd_model_catalog() {
   printf '%s\n' "${STTD_SUPPORTED_MODELS[@]}"
@@ -19,6 +24,36 @@ sttd_model_catalog_csv() {
     joined="${joined}${model}"
   done
   printf '%s\n' "${joined}"
+}
+
+sttd_model_display_size() {
+  case "$1" in
+    tiny) printf '75 MB\n' ;;
+    base) printf '142 MB\n' ;;
+    small) printf '466 MB\n' ;;
+    large) printf '3.1 GB\n' ;;
+    *) printf 'unknown size\n' ;;
+  esac
+}
+
+sttd_model_size_bytes() {
+  case "$1" in
+    tiny) printf '78643200\n' ;;
+    base) printf '148897792\n' ;;
+    small) printf '488636416\n' ;;
+    large) printf '3328599654\n' ;;
+    *) printf '0\n' ;;
+  esac
+}
+
+sttd_model_resource_warning() {
+  case "$1" in
+    large) printf 'large model: requires several GB of disk space and more memory\n' ;;
+    small) printf 'good accuracy with moderate disk and memory usage\n' ;;
+    base) printf 'balanced size and accuracy\n' ;;
+    tiny) printf 'smallest and fastest model, with lower accuracy\n' ;;
+    *) printf 'model resource usage is unknown\n' ;;
+  esac
 }
 
 sttd_is_valid_model() {
@@ -69,10 +104,11 @@ sttd_prompt_for_model() {
   index=1
   for model in "${options[@]}"; do
     if [[ "${index}" -eq "${default_index}" ]]; then
-      printf '  %d. %s (default)\n' "${index}" "${model}" >&2
+      printf '  %d. %s - %s (default)\n' "${index}" "${model}" "$(sttd_model_display_size "${model}")" >&2
     else
-      printf '  %d. %s\n' "${index}" "${model}" >&2
+      printf '  %d. %s - %s\n' "${index}" "${model}" "$(sttd_model_display_size "${model}")" >&2
     fi
+    printf '     %s\n' "$(sttd_model_resource_warning "${model}")" >&2
     index=$((index + 1))
   done
 
@@ -121,6 +157,9 @@ sttd_current_model_from_env() {
     ggml-small.bin)
       printf 'small\n'
       ;;
+    ggml-large-v3.bin|ggml-large.bin)
+      printf 'large\n'
+      ;;
   esac
 }
 
@@ -134,32 +173,44 @@ sttd_set_env_value() {
     printf 'cannot update configuration; file not found: %s\n' "${env_file}" >&2
     return 1
   fi
-
-  if grep -q "^${key}=" "${env_file}"; then
-    temp_file="$(mktemp)"
-    awk -v key="${key}" -v value="${value}" '
-      BEGIN { replaced = 0 }
-      $0 ~ ("^" key "=") {
-        print key "=" value
-        replaced = 1
-        next
-      }
-      { print }
-      END {
-        if (replaced == 0) {
-          print key "=" value
-        }
-      }
-    ' "${env_file}" > "${temp_file}"
-    mv "${temp_file}" "${env_file}"
-    return
+  if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+    printf 'cannot update configuration; newlines are not allowed in %s\n' "${key}" >&2
+    return 1
   fi
 
-  printf '\n%s=%s\n' "${key}" "${value}" >> "${env_file}"
+  temp_file="$(mktemp "${env_file}.tmp.XXXXXX")"
+  if ! awk -v key="${key}" -v value="${value}" '
+    BEGIN { replaced = 0 }
+    $0 ~ ("^" key "=") {
+      print key "=" value
+      replaced = 1
+      next
+    }
+    { print }
+    END {
+      if (replaced == 0) {
+        print key "=" value
+      }
+    }
+  ' "${env_file}" > "${temp_file}"; then
+    rm -f "${temp_file}"
+    return 1
+  fi
+  chmod 600 "${temp_file}"
+  if ! mv "${temp_file}" "${env_file}"; then
+    rm -f "${temp_file}"
+    return 1
+  fi
 }
 
 sttd_model_file_name() {
   local model_name="$1"
+
+  if [[ "${model_name}" == "large" ]]; then
+    printf 'ggml-large-v3.bin\n'
+    return
+  fi
+
   printf 'ggml-%s.bin\n' "${model_name}"
 }
 
@@ -187,6 +238,9 @@ sttd_model_checksum() {
     small)
       printf '%s\n' "${STTD_MODEL_SHA256_SMALL:-}"
       ;;
+    large)
+      printf '%s\n' "${STTD_MODEL_SHA256_LARGE:-}"
+      ;;
   esac
 }
 
@@ -206,13 +260,16 @@ sttd_load_model_source_config() {
         fi
         ;;
       STTD_MODEL_SHA256_TINY)
-        STTD_MODEL_SHA256_TINY="${value}"
+        [[ -n "${value}" ]] && STTD_MODEL_SHA256_TINY="${value}"
         ;;
       STTD_MODEL_SHA256_BASE)
-        STTD_MODEL_SHA256_BASE="${value}"
+        [[ -n "${value}" ]] && STTD_MODEL_SHA256_BASE="${value}"
         ;;
       STTD_MODEL_SHA256_SMALL)
-        STTD_MODEL_SHA256_SMALL="${value}"
+        [[ -n "${value}" ]] && STTD_MODEL_SHA256_SMALL="${value}"
+        ;;
+      STTD_MODEL_SHA256_LARGE)
+        [[ -n "${value}" ]] && STTD_MODEL_SHA256_LARGE="${value}"
         ;;
     esac
   done < "${env_file}"
@@ -250,6 +307,8 @@ sttd_ensure_model_downloaded() {
   local model_checksum
   local partial_path
   local curl_args
+  local required_bytes
+  local available_kib
 
   model_path="$(sttd_model_path "${model_dir}" "${model_name}")"
   model_url="$(sttd_model_url "${model_name}")"
@@ -257,8 +316,9 @@ sttd_ensure_model_downloaded() {
   partial_path="${model_path}.part"
 
   mkdir -p "${model_dir}"
+  chmod 700 "${model_dir}"
 
-  if [[ -f "${model_path}" ]]; then
+  if [[ -s "${model_path}" ]]; then
     printf 'model already available: %s\n' "${model_path}"
     sttd_verify_model_checksum "${model_path}" "${model_checksum}"
     STTD_MODEL_PATH="${model_path}"
@@ -266,7 +326,15 @@ sttd_ensure_model_downloaded() {
     return
   fi
 
-  printf 'downloading model %s; this may take several minutes\n' "${model_name}"
+  required_bytes=$(( $(sttd_model_size_bytes "${model_name}") + 52428800 ))
+  available_kib="$(df -Pk "${model_dir}" | awk 'NR == 2 { print $4 }')"
+  if [[ "${available_kib}" =~ ^[0-9]+$ ]] && (( available_kib * 1024 < required_bytes )); then
+    printf 'not enough disk space for model %s (%s); at least %s plus a safety margin is required\n' \
+      "${model_name}" "$(sttd_model_display_size "${model_name}")" "$(sttd_model_display_size "${model_name}")" >&2
+    return 1
+  fi
+
+  printf 'downloading model %s (%s); this may take several minutes\n' "${model_name}" "$(sttd_model_display_size "${model_name}")"
   printf 'source: %s\n' "${model_url}"
   printf 'destination: %s\n' "${model_path}"
 

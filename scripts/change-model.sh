@@ -28,7 +28,7 @@ print_step() {
 
 usage() {
   cat <<'EOF'
-usage: ./change-model.sh [--model <tiny|base|small>]
+usage: ./change-model.sh [--model <tiny|base|small|large>]
 EOF
 }
 
@@ -105,6 +105,8 @@ main() {
   select_model
 
   print_step 3 4 "ensuring the ${MODEL_NAME} model is available"
+  printf 'selected model: %s (%s)\n' "${MODEL_NAME}" "$(sttd_model_display_size "${MODEL_NAME}")"
+  printf 'resource note: %s\n' "$(sttd_model_resource_warning "${MODEL_NAME}")"
   sttd_load_model_source_config "${ENV_FILE}"
   sttd_ensure_model_downloaded "${MODEL_NAME}" "${MODEL_DIR}"
 

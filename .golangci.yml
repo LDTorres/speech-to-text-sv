@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/golangci/golangci-lint/v1.64.8/jsonschema/golangci.jsonschema.json
+# Compatible with the repository-pinned golangci-lint v1.64.8.
+run:
+  timeout: 5m
+  tests: true
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    - path: '.*_test\.go'
+      linters:
+        - gosec
+    - path: 'internal/(modules/audio/audio\.go|platform/linux/audio_pwrecord\.go)'
+      text: 'G302: Expect file permissions to be 0600 or less'
+      linters:
+        - gosec
+
+linters:
+  disable-all: true
+  enable:
+    # Correctness and error handling.
+    - errcheck
+    - errorlint
+    - govet
+    - ineffassign
+    - nilerr
+    - staticcheck
+    - unconvert
+    - unused
+
+    # Security, context propagation, and resource lifecycle.
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - gosec
+    - noctx
+
+    # Maintainability and conventions.
+    - gofumpt
+    - goimports
+    - misspell
+    - nolintlint
+
+    # Test quality.
+    - thelper
+    - testifylint
+
+linters-settings:
+  gofumpt:
+    extra-rules: true
+  nolintlint:
+    require-explanation: true
+    require-specific: true

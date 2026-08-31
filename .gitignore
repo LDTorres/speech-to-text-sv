@@ -28,9 +28,16 @@ go.work.sum
 .env
 .sttd/
 dist/
+.bin/
+.cache/
 
 # Editor/IDE
 # .idea/
 # .vscode/
 
 .DS_Store
+
+
+PLAN*.md
+code_review.md
+plan*.md

@@ -32,12 +32,13 @@ type FileRecorder struct {
 	fileName     string
 	sampleFormat string
 
+	operation sync.Mutex
 	mu        sync.Mutex
 	recording bool
 	startedAt time.Time
 }
 
-func NewFileRecorder(tempDir string, fileName string, sampleFormat string) *FileRecorder {
+func NewFileRecorder(tempDir, fileName, sampleFormat string) *FileRecorder {
 	return &FileRecorder{
 		tempDir:      tempDir,
 		fileName:     fileName,
@@ -46,6 +47,9 @@ func NewFileRecorder(tempDir string, fileName string, sampleFormat string) *File
 }
 
 func (r *FileRecorder) Start(ctx context.Context) error {
+	r.operation.Lock()
+	defer r.operation.Unlock()
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -66,6 +70,9 @@ func (r *FileRecorder) Start(ctx context.Context) error {
 }
 
 func (r *FileRecorder) Stop(ctx context.Context) (Recording, error) {
+	r.operation.Lock()
+	defer r.operation.Unlock()
+
 	select {
 	case <-ctx.Done():
 		return Recording{}, ctx.Err()
@@ -88,12 +95,28 @@ func (r *FileRecorder) Stop(ctx context.Context) (Recording, error) {
 	r.startedAt = time.Time{}
 	r.mu.Unlock()
 
-	if err := os.MkdirAll(r.tempDir, 0o755); err != nil {
+	if err := os.MkdirAll(r.tempDir, 0o700); err != nil {
 		return Recording{}, fmt.Errorf("create audio temp dir: %w", err)
 	}
+	// #nosec G302 -- 0700 is the private directory mode
+	if err := os.Chmod(r.tempDir, 0o700); err != nil {
+		return Recording{}, fmt.Errorf("secure audio temp dir: %w", err)
+	}
 
-	if err := os.WriteFile(recording.Path, r.placeholderData(), 0o644); err != nil {
+	file, err := os.OpenFile(recording.Path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
 		return Recording{}, fmt.Errorf("write audio recording: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return Recording{}, fmt.Errorf("secure audio recording: %w", err)
+	}
+	if _, err := file.Write(r.placeholderData()); err != nil {
+		_ = file.Close()
+		return Recording{}, fmt.Errorf("write audio recording: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return Recording{}, fmt.Errorf("close audio recording: %w", err)
 	}
 
 	return recording, nil

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/LDTorres/speech-to-text-sv/internal/modules/session"
 	"go.uber.org/zap"
@@ -32,6 +33,12 @@ const (
 	ErrorCodeInternal     = "internal_error"
 )
 
+const (
+	maxRequestBytes       = 64 * 1024
+	maxConcurrentRequests = 16
+	requestTimeout        = 30 * time.Second
+)
+
 type Request struct {
 	Command   string `json:"command"`
 	Source    string `json:"source,omitempty"`
@@ -51,9 +58,13 @@ type Server struct {
 	socketPath string
 	handler    session.Service
 
-	mu       sync.Mutex
-	listener net.Listener
-	done     chan struct{}
+	mu          sync.Mutex
+	listener    net.Listener
+	done        chan struct{}
+	cancel      context.CancelFunc
+	connections map[net.Conn]struct{}
+	requests    chan struct{}
+	handlers    sync.WaitGroup
 }
 
 func NewServer(logger *zap.Logger, socketPath string, handler session.Service) (*Server, error) {
@@ -63,9 +74,11 @@ func NewServer(logger *zap.Logger, socketPath string, handler session.Service) (
 	}
 
 	return &Server{
-		logger:     logger,
-		socketPath: resolvedPath,
-		handler:    handler,
+		logger:      logger,
+		socketPath:  resolvedPath,
+		handler:     handler,
+		connections: make(map[net.Conn]struct{}),
+		requests:    make(chan struct{}, maxConcurrentRequests),
 	}, nil
 }
 
@@ -81,11 +94,18 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("external control already started")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(s.socketPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.socketPath), 0o700); err != nil {
 		return fmt.Errorf("create socket dir: %w", err)
 	}
-	if err := os.Remove(s.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove stale socket: %w", err)
+	if info, err := os.Lstat(s.socketPath); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return fmt.Errorf("socket path is not a unix socket: %q", s.socketPath)
+		}
+		if err := os.Remove(s.socketPath); err != nil {
+			return fmt.Errorf("remove stale socket: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect stale socket: %w", err)
 	}
 
 	listener, err := net.Listen("unix", s.socketPath)
@@ -98,11 +118,13 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("chmod socket: %w", err)
 	}
 
+	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	s.listener = listener
 	s.done = done
+	s.cancel = cancel
 
-	go s.run(ctx, listener, done)
+	go s.run(runCtx, listener, done)
 
 	s.logger.Info("external control started", zap.String("socket_path", s.socketPath))
 
@@ -113,20 +135,30 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	listener := s.listener
 	done := s.done
-	s.listener = nil
-	s.done = nil
+	cancel := s.cancel
 	s.mu.Unlock()
 
 	if listener == nil {
 		return nil
 	}
 
+	if cancel != nil {
+		cancel()
+	}
 	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		return fmt.Errorf("close listener: %w", err)
 	}
+	s.closeConnections()
 
 	select {
 	case <-done:
+		s.mu.Lock()
+		if s.listener == listener {
+			s.listener = nil
+			s.done = nil
+			s.cancel = nil
+		}
+		s.mu.Unlock()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -147,23 +179,65 @@ func (s *Server) run(ctx context.Context, listener net.Listener, done chan struc
 		_ = os.Remove(s.socketPath)
 	}()
 
+	watchDone := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		_ = listener.Close()
+		select {
+		case <-ctx.Done():
+			_ = listener.Close()
+			s.closeConnections()
+		case <-watchDone:
+		}
 	}()
+	defer close(watchDone)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
-				return
+				break
 			}
 			s.logger.Warn("accept external control connection", zap.Error(err))
 			continue
 		}
 
-		go s.handleConn(ctx, conn)
+		select {
+		case s.requests <- struct{}{}:
+			s.handlers.Add(1)
+			s.mu.Lock()
+			s.connections[conn] = struct{}{}
+			s.mu.Unlock()
+			go func() {
+				defer s.handlers.Done()
+				defer func() { <-s.requests }()
+				defer s.removeConnection(conn)
+				s.handleConn(ctx, conn)
+			}()
+		default:
+			_ = conn.Close()
+		}
 	}
+
+	s.closeConnections()
+	s.handlers.Wait()
+}
+
+func (s *Server) closeConnections() {
+	s.mu.Lock()
+	connections := make([]net.Conn, 0, len(s.connections))
+	for conn := range s.connections {
+		connections = append(connections, conn)
+	}
+	s.mu.Unlock()
+
+	for _, conn := range connections {
+		_ = conn.Close()
+	}
+}
+
+func (s *Server) removeConnection(conn net.Conn) {
+	s.mu.Lock()
+	delete(s.connections, conn)
+	s.mu.Unlock()
 }
 
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
@@ -171,12 +245,21 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		_ = conn.Close()
 	}()
 
-	data, err := io.ReadAll(conn)
+	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
+	data, err := io.ReadAll(io.LimitReader(conn, maxRequestBytes+1))
 	if err != nil {
 		s.writeResponse(conn, Response{
 			OK:        false,
 			ErrorCode: ErrorCodeInternal,
 			Message:   fmt.Sprintf("read request: %v", err),
+		})
+		return
+	}
+	if len(data) > maxRequestBytes {
+		s.writeResponse(conn, Response{
+			OK:        false,
+			ErrorCode: ErrorCodeInternal,
+			Message:   "request exceeds maximum size",
 		})
 		return
 	}
@@ -210,27 +293,27 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 func (s *Server) handleRequest(ctx context.Context, request Request) Response {
 	switch request.Command {
 	case CommandPing, CommandStatus:
-		return s.statusResponse(true, "")
+		return s.statusResponse(ctx, true, "")
 	case CommandStart:
 		if err := s.handler.StartRecording(ctx); err != nil {
-			return s.errorResponse(err)
+			return s.errorResponse(ctx, err)
 		}
-		return s.statusResponse(true, "recording started")
+		return s.statusResponse(ctx, true, "recording started")
 	case CommandStop:
 		if err := s.handler.StopRecordingAndProcess(ctx); err != nil {
-			return s.errorResponse(err)
+			return s.errorResponse(ctx, err)
 		}
-		return s.statusResponse(true, "recording stopped")
+		return s.statusResponse(ctx, true, "recording stopped")
 	case CommandToggle:
 		if err := s.handler.ToggleRecording(ctx); err != nil {
-			return s.errorResponse(err)
+			return s.errorResponse(ctx, err)
 		}
-		return s.statusResponse(true, "recording toggled")
+		return s.statusResponse(ctx, true, "recording toggled")
 	case CommandRetry:
 		if err := s.handler.RetryLastPaste(ctx); err != nil {
-			return s.errorResponse(err)
+			return s.errorResponse(ctx, err)
 		}
-		return s.statusResponse(true, "retry completed")
+		return s.statusResponse(ctx, true, "retry completed")
 	default:
 		return Response{
 			OK:        false,
@@ -240,8 +323,8 @@ func (s *Server) handleRequest(ctx context.Context, request Request) Response {
 	}
 }
 
-func (s *Server) statusResponse(ok bool, message string) Response {
-	status := s.handler.Status(context.Background())
+func (s *Server) statusResponse(ctx context.Context, ok bool, message string) Response {
+	status := s.handler.Status(ctx)
 	return Response{
 		OK:             ok,
 		State:          status.State,
@@ -250,8 +333,8 @@ func (s *Server) statusResponse(ok bool, message string) Response {
 	}
 }
 
-func (s *Server) errorResponse(err error) Response {
-	status := s.handler.Status(context.Background())
+func (s *Server) errorResponse(ctx context.Context, err error) Response {
+	status := s.handler.Status(ctx)
 	code := mapErrorCode(err)
 
 	return Response{
@@ -276,13 +359,19 @@ func (s *Server) writeResponse(conn net.Conn, response Response) {
 }
 
 func ResolveSocketPath(explicit string) (string, error) {
-	if strings.TrimSpace(explicit) != "" {
-		return strings.TrimSpace(explicit), nil
+	if trimmed := strings.TrimSpace(explicit); trimmed != "" {
+		if !filepath.IsAbs(trimmed) {
+			return "", errors.New("external control socket path must be absolute")
+		}
+		return filepath.Clean(trimmed), nil
 	}
 
 	runtimeDir := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR"))
 	if runtimeDir == "" {
 		return "", errors.New("external control requires STTD_EXTERNAL_CONTROL_SOCKET_PATH or XDG_RUNTIME_DIR")
+	}
+	if !filepath.IsAbs(runtimeDir) {
+		return "", errors.New("XDG_RUNTIME_DIR must be absolute")
 	}
 
 	return filepath.Join(runtimeDir, "sttd", "control.sock"), nil

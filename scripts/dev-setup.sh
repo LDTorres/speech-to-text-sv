@@ -25,6 +25,7 @@ WHISPER_BINARY_REAL_PATH="${RUNTIME_BIN_DIR}/${WHISPER_BINARY_REAL_NAME}"
 WHISPER_SOURCE_DIR="${RUNTIME_SRC_DIR}/whisper.cpp-${WHISPER_CPP_VERSION}"
 WHISPER_BUILD_DIR="${WHISPER_SOURCE_DIR}/build"
 WHISPER_SOURCE_URL="https://github.com/ggml-org/whisper.cpp/archive/refs/tags/${WHISPER_CPP_VERSION}.tar.gz"
+WHISPER_SOURCE_SHA256="${WHISPER_SOURCE_SHA256:-b26f30e52c095ccb75da40b168437736605eb280de57381887bf9e2b65f31e66}"
 
 print_step() {
   printf '\n==> [%s/%s] %s\n' "$1" "$2" "$3"
@@ -37,9 +38,29 @@ need_cmd() {
   fi
 }
 
+verify_sha256() {
+  local expected="$1"
+  local path="$2"
+  local actual
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s  %s\n' "${expected}" "${path}" | sha256sum -c -
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "${path}" | awk '{print $1}')"
+    if [[ "${actual}" == "${expected}" ]]; then
+      return
+    fi
+  fi
+
+  printf 'SHA-256 checksum mismatch for %s\n' "${path}" >&2
+  return 1
+}
+
 usage() {
   cat <<'EOF'
-usage: ./scripts/dev-setup.sh [--profile <macos|linux|steam_deck>] [--model <tiny|base|small>] [--language <code>]
+usage: ./scripts/dev-setup.sh [--profile <macos|linux|steam_deck>] [--model <tiny|base|small|large>] [--language <code>]
 EOF
 }
 
@@ -241,6 +262,9 @@ download_whisper_source() {
   mkdir -p "${WHISPER_SOURCE_DIR}"
 
   curl -fsSL "${WHISPER_SOURCE_URL}" -o "${temp_dir}/whisper.cpp.tar.gz"
+  if [[ -n "${WHISPER_SOURCE_SHA256}" ]]; then
+    verify_sha256 "${WHISPER_SOURCE_SHA256}" "${temp_dir}/whisper.cpp.tar.gz"
+  fi
   tar -xzf "${temp_dir}/whisper.cpp.tar.gz" --strip-components=1 -C "${WHISPER_SOURCE_DIR}"
   rm -rf "${temp_dir}"
 }

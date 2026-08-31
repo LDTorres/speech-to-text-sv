@@ -6,7 +6,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       build-essential \
-      libx11-dev && \
+      libx11-dev \
+      xvfb && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

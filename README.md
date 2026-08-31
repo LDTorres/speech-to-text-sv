@@ -252,13 +252,34 @@ This produces:
 - `dist/release/sttd-<version>-linux-amd64.tar.gz.sha256`
 
 CUDA builds produce the corresponding `-cuda` directory, archive, and
-checksum. `make publish-release` builds and uploads both assets.
+checksum.
 
-Publish the release to GitHub Releases with an explicit version or bump:
+Publish the release to GitHub Releases with an explicit version or bump. The
+publish script builds missing assets by default, or uploads already-built
+assets when `--skip-build` is used.
 
 ```bash
 make publish-release RELEASE_BUMP=patch
 ```
+
+For the official release flow, first validate the branch or tag with the
+manual `Release validation` GitHub Actions workflow. Then build both Linux
+assets locally and publish them without rebuilding:
+
+```bash
+./scripts/build-release.sh --version v1.0.0-rc1
+WHISPER_ACCELERATION=cuda \
+  ./scripts/build-release.sh --version v1.0.0-rc1
+./scripts/publish-release.sh \
+  --tag v1.0.0-rc1 \
+  --prerelease \
+  --skip-build
+```
+
+The release workflow does not run automatically when a tag is pushed. This
+keeps the long CUDA build local, where container layers and compiler caches can
+be reused. Do not commit release archives to Git; they are uploaded as GitHub
+Release assets.
 
 End users can download published archives from the [GitHub Releases page](https://github.com/LDTorres/speech-to-text-sv/releases).
 

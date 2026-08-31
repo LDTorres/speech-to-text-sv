@@ -12,11 +12,11 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -51,6 +51,9 @@ jobs:
 
       - name: Test release bootstrap
         run: ./scripts/test-bootstrap.sh
+
+      - name: Test interactive prompts with a pseudo-terminal
+        run: ./scripts/test-prompts-pty.sh
 
       - name: Build and publish release
         env:

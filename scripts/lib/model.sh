@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+MODEL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/prompt.sh
+source "${MODEL_SCRIPT_DIR}/prompt.sh"
+
 STTD_SUPPORTED_MODELS=(tiny base small large)
 # shellcheck disable=SC2034
 STTD_DEFAULT_MODEL=base
@@ -113,8 +117,7 @@ sttd_prompt_for_model() {
   done
 
   while true; do
-    printf 'select a model [default %d]: ' "${default_index}" >&2
-    read -r input
+    input="$(sttd_prompt_value 'select a model' "${default_index}")"
 
     if [[ -z "${input}" ]]; then
       printf '%s\n' "${options[$((default_index - 1))]}"

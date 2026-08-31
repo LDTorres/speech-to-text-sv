@@ -8,6 +8,8 @@ if [[ -f "${SCRIPT_DIR}/scripts/speech-to-text.service.template" ]]; then
 else
   SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 fi
+# shellcheck source=scripts/lib/prompt.sh
+source "${SOURCE_ROOT}/scripts/lib/prompt.sh"
 
 INSTALL_DIR="${STTD_INSTALL_DIR:-${HOME}/.local/opt/sttd}"
 ROOT_DIR="${INSTALL_DIR}"
@@ -74,8 +76,6 @@ service_points_to_root() {
 }
 
 confirm_rollback() {
-  local answer=""
-
   if [[ "${ASSUME_YES}" == "true" ]]; then
     return
   fi
@@ -84,9 +84,7 @@ confirm_rollback() {
     exit 1
   fi
 
-  printf 'This will swap the current installation with %s.previous. Continue? [Y/n] ' "${ROOT_DIR}" >&2
-  read -r answer
-  if [[ -n "${answer}" && "${answer}" != "Y" && "${answer}" != "y" ]]; then
+  if [[ "$(sttd_prompt_yes_no "This will swap the current installation with ${ROOT_DIR}.previous. Continue?" no)" != "true" ]]; then
     printf 'rollback cancelled\n'
     exit 0
   fi

@@ -87,6 +87,7 @@ create_release() {
   cp "${ROOT_DIR}/scripts/listen.sh" "${release_dir}/scripts/listen.sh"
   cp "${ROOT_DIR}/scripts/lib/model.sh" "${release_dir}/scripts/lib/model.sh"
   cp "${ROOT_DIR}/scripts/lib/hyprland.sh" "${release_dir}/scripts/lib/hyprland.sh"
+  cp "${ROOT_DIR}/scripts/lib/prompt.sh" "${release_dir}/scripts/lib/prompt.sh"
   cp "${ROOT_DIR}/scripts/speech-to-text.service.template" "${release_dir}/scripts/speech-to-text.service.template"
   cp "${ROOT_DIR}/.env.linux.example" "${release_dir}/profiles/linux.env"
   sed -i \
@@ -151,6 +152,7 @@ main() {
   doctor_output="${TEST_DIR}/doctor-status.log"
   run_release_script "${install_dir}/doctor.sh" --status > "${doctor_output}" 2>&1
   assert_contains "${doctor_output}" "info: version: release-one"
+  assert_contains "${doctor_output}" "info: Hyprland config mode: direct"
   assert_contains "${doctor_output}" "ok: speech-to-text.service is active"
 
   run_release_script "${install_dir}/change-model.sh" --model small
@@ -172,7 +174,7 @@ main() {
     fail 'purge cancellation unexpectedly succeeded'
   fi
   assert_file "${install_dir}/sttd"
-  run_release_script "${release_two}/uninstall.sh" --install-dir "${install_dir}" --purge --yes
+  printf 'y\n' | run_release_script "${release_two}/uninstall.sh" --install-dir "${install_dir}" --purge
   assert_missing "${install_dir}"
   assert_missing "${install_dir}.previous"
   assert_missing "${TEST_HOME}/.config/systemd/user/speech-to-text.service"
@@ -181,6 +183,24 @@ main() {
     fail 'managed Hyprland bindings were not removed'
   fi
   assert_contains "${TEST_SYSTEMCTL_LOG}" "--user disable --now speech-to-text.service"
+
+  mv "${TEST_HOME}/.config/hypr/hyprland.conf" "${TEST_HOME}/.config/hypr/hyprland.conf.source"
+  ln -s "hyprland.conf.source" "${TEST_HOME}/.config/hypr/hyprland.conf"
+  local nix_output="${TEST_DIR}/nix-install.log"
+  printf 'listen\ny\n1\n1\ny\n' | run_release_script \
+    "${release_one}/install.sh" --interactive --profile linux --integration hyprland \
+    --model tiny --language es --as-service --install-dir "${install_dir}" > "${nix_output}" 2>&1
+  assert_file "${TEST_HOME}/.config/hypr/listen.conf"
+  assert_contains "${TEST_HOME}/.config/hypr/listen.conf" "# listen:begin"
+  assert_contains "${nix_output}" "source = ${TEST_HOME}/.config/hypr/listen.conf"
+  if grep -Fq '# listen:begin' "${TEST_HOME}/.config/hypr/hyprland.conf.source"; then
+    fail 'symlink target was modified during Hyprland setup'
+  fi
+  run_release_script "${install_dir}/uninstall.sh" --install-dir "${install_dir}" --purge --yes >/dev/null
+  assert_file "${TEST_HOME}/.config/hypr/listen.conf"
+  if grep -Fq '# listen:begin' "${TEST_HOME}/.config/hypr/listen.conf"; then
+    fail 'managed Hyprland bindings were not removed from the separate file'
+  fi
 
   printf 'lifecycle integration test completed successfully\n'
 }

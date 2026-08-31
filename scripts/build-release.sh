@@ -282,6 +282,7 @@ stage_release_files() {
   cp "${ROOT_DIR}/scripts/speech-to-text.service.template" "${RELEASE_DIR}/scripts/speech-to-text.service.template"
   cp "${ROOT_DIR}/scripts/lib/model.sh" "${RELEASE_DIR}/scripts/lib/model.sh"
   cp "${ROOT_DIR}/scripts/lib/hyprland.sh" "${RELEASE_DIR}/scripts/lib/hyprland.sh"
+  cp "${ROOT_DIR}/scripts/lib/prompt.sh" "${RELEASE_DIR}/scripts/lib/prompt.sh"
 
   cp "${ROOT_DIR}/LICENSE" "${RELEASE_DIR}/LICENSE"
   cp "${ROOT_DIR}/INSTALL.md" "${RELEASE_DIR}/INSTALL.md"

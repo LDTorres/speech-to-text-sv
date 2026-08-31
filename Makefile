@@ -16,7 +16,7 @@ RELEASE_BUMP ?=
 GO_BUILD_TAGS ?= x11hotkey
 RELEASE_ARCHIVE ?=
 
-.PHONY: check lint lint-fix lint-install vulncheck vulncheck-install run ctl test test-x11-docker test-lifecycle test-bootstrap dev-setup change-model build-whisper-cli build-release publish-release verify-release
+.PHONY: check lint lint-fix lint-install vulncheck vulncheck-install run ctl test test-x11-docker test-lifecycle test-bootstrap test-prompts-pty dev-setup change-model build-whisper-cli build-release publish-release verify-release
 
 check: test lint vulncheck
 
@@ -64,6 +64,9 @@ test-lifecycle:
 
 test-bootstrap:
 	./scripts/test-bootstrap.sh
+
+test-prompts-pty:
+	./scripts/test-prompts-pty.sh
 
 dev-setup:
 	./scripts/dev-setup.sh $(if $(PROFILE),--profile $(PROFILE),) $(if $(MODEL),--model $(MODEL),) $(if $(LANGUAGE),--language $(LANGUAGE),)

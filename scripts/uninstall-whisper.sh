@@ -12,6 +12,8 @@ fi
 if [[ -f "${SOURCE_ROOT}/scripts/lib/hyprland.sh" ]]; then
   source "${SOURCE_ROOT}/scripts/lib/hyprland.sh"
 fi
+# shellcheck source=scripts/lib/prompt.sh
+source "${SOURCE_ROOT}/scripts/lib/prompt.sh"
 
 INSTALL_DIR="${STTD_INSTALL_DIR:-${HOME}/.local/opt/sttd}"
 ROOT_DIR="${INSTALL_DIR}"
@@ -87,7 +89,7 @@ value_from_env_file() {
 }
 
 confirm_purge() {
-  local confirmation command_name config_path
+  local command_name config_path
 
   [[ "${PURGE}" == "true" && "${ASSUME_YES}" != "true" ]] || return 0
   command_name="$(value_from_env_file STTD_PUBLIC_COMMAND_NAME)"
@@ -102,9 +104,7 @@ confirm_purge() {
   printf '  log: %s\n' "${LOG_PATH}" >&2
   printf '  public command: %s/.local/bin/%s\n' "${HOME}" "${command_name}" >&2
   printf '  managed Hyprland block in: %s\n' "${config_path}" >&2
-  printf 'Type uppercase Y to continue: ' >&2
-  IFS= read -r confirmation || true
-  if [[ "${confirmation}" != "Y" ]]; then
+  if [[ "$(sttd_prompt_yes_no 'Continue with purge?' no)" != "true" ]]; then
     printf 'purge cancelled; no files were removed\n' >&2
     exit 1
   fi
@@ -165,6 +165,11 @@ remove_hyprland_bindings() {
   [[ "${integration}" == "hyprland" ]] || return 0
   config_path="$(value_from_env_file STTD_HYPRLAND_CONFIG_PATH)"
   [[ -n "${config_path}" ]] || config_path="${HOME}/.config/hypr/hyprland.conf"
+  if [[ -L "${config_path}" ]]; then
+    printf 'skipping Hyprland binding removal from symlinked config: %s\n' "${config_path}" >&2
+    printf 'if bindings were configured declaratively, remove them from Nix/Home Manager separately\n' >&2
+    return 0
+  fi
   if [[ -f "${config_path}" && $(grep -Fc '# listen:begin' "${config_path}" || true) -gt 0 && $(type -t sttd_hyprland_remove_bindings || true) == function ]]; then
     sttd_hyprland_remove_bindings "${config_path}"
     printf 'removed managed Hyprland bindings: %s\n' "${config_path}"

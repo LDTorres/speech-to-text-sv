@@ -41,6 +41,8 @@ COMMAND_NAME_EXPLICIT=false
 HYPRLAND_BINDINGS=""
 HYPRLAND_BINDINGS_EXPLICIT=false
 HYPRLAND_CONFIG_PATH="${STTD_HYPRLAND_CONFIG_PATH:-${HOME}/.config/hypr/hyprland.conf}"
+HYPRLAND_CONFIG_MODE="${STTD_HYPRLAND_CONFIG_MODE:-auto}"
+HYPRLAND_CONFIG_MODE_EXPLICIT=false
 HYPRLAND_BINDING="${STTD_HYPRLAND_BINDING:-\$mainMod ALT, SPACE}"
 SERVICE_NAME="speech-to-text.service"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
@@ -100,6 +102,7 @@ options:
   --command-name <name>              public command name (default: listen)
   --hyprland-bindings <yes|no>       manage optional Hyprland bindings
   --hyprland-config <path>           Hyprland config file to manage
+  --hyprland-config-mode <mode>      config mode: auto, direct, separate or skip
   --install-dir <path>               stable installation directory
   --in-place                         keep the unpacked release as the installation directory
   --check                            validate dependencies without modifying files
@@ -175,6 +178,14 @@ parse_args() {
       --hyprland-config)
         [[ $# -ge 2 ]] || { printf 'missing value for --hyprland-config\n' >&2; exit 1; }
         HYPRLAND_CONFIG_PATH="$2"
+        HYPRLAND_CONFIG_MODE=direct
+        HYPRLAND_CONFIG_MODE_EXPLICIT=true
+        shift 2
+        ;;
+      --hyprland-config-mode)
+        [[ $# -ge 2 ]] || { printf 'missing value for --hyprland-config-mode\n' >&2; exit 1; }
+        HYPRLAND_CONFIG_MODE="$2"
+        HYPRLAND_CONFIG_MODE_EXPLICIT=true
         shift 2
         ;;
       --install-dir)
@@ -211,7 +222,10 @@ parse_args() {
   fi
 
   preserve_existing_settings
+  HYPRLAND_BINDINGS="${HYPRLAND_BINDINGS,,}"
+  HYPRLAND_CONFIG_MODE="${HYPRLAND_CONFIG_MODE,,}"
   configure_interactive_defaults
+  configure_hyprland_config_mode
   if [[ "${ACCELERATION_EXPLICIT}" != "true" ]]; then
     if [[ "${PACKAGE_ACCELERATION}" == "cuda" ]]; then
       ACCELERATION_NAME=cuda
@@ -286,33 +300,59 @@ parse_args() {
       exit 1
       ;;
   esac
+  case "${HYPRLAND_CONFIG_MODE}" in
+    auto|direct|separate|skip)
+      ;;
+    *)
+      printf 'invalid Hyprland config mode: %s (expected auto, direct, separate or skip)\n' "${HYPRLAND_CONFIG_MODE}" >&2
+      exit 1
+      ;;
+  esac
 }
 
-prompt_value() {
-  local label="$1"
-  local default_value="$2"
-  local input
+configure_hyprland_config_mode() {
+  local selection
 
-  printf '%s [%s]: ' "${label}" "${default_value}" >&2
-  read -r input
-  printf '%s\n' "${input:-${default_value}}"
-}
+  [[ "${CHECK_ONLY}" != "true" ]] || return 0
+  [[ "${INTEGRATION_NAME}" == "hyprland" ]] || return 0
+  [[ "${HYPRLAND_BINDINGS}" == "true" || "${HYPRLAND_BINDINGS}" == "yes" ]] || return 0
 
-prompt_yes_no() {
-  local label="$1"
-  local default_value="$2"
-  local input
+  if [[ "${HYPRLAND_CONFIG_MODE}" == "auto" ]]; then
+    if [[ ! -L "${HYPRLAND_CONFIG_PATH}" ]]; then
+      HYPRLAND_CONFIG_MODE=direct
+    elif [[ "${INTERACTIVE_MODE}" == "true" ]]; then
+      printf '\nHyprland config is a symlink: %s\n' "${HYPRLAND_CONFIG_PATH}" >&2
+      printf 'This is common with NixOS and Home Manager, which manage the file declaratively.\n' >&2
+      printf 'The installer will not modify the symlink or anything under /nix/store.\n' >&2
+      printf '  1. create a separate writable bindings file (recommended)\n' >&2
+      printf '  2. skip bindings and configure them in Nix/Home Manager\n' >&2
+      printf '  3. choose another writable Hyprland config file\n' >&2
+      selection="$(sttd_prompt_value 'Symlinked config option' 1)"
+      case "${selection}" in
+        1)
+          HYPRLAND_CONFIG_MODE=separate
+          ;;
+        2)
+          HYPRLAND_CONFIG_MODE=skip
+          ;;
+        3)
+          HYPRLAND_CONFIG_MODE=direct
+          HYPRLAND_CONFIG_PATH="$(sttd_prompt_value 'Writable Hyprland config path' "${HOME}/.config/hypr/listen.conf")"
+          ;;
+        *)
+          printf 'invalid symlinked config option: %s\n' "${selection}" >&2
+          exit 1
+          ;;
+      esac
+    else
+      HYPRLAND_CONFIG_MODE=separate
+      printf 'warning: Hyprland config is symlinked; using a separate writable bindings file\n' >&2
+    fi
+  fi
 
-  while true; do
-    printf '%s [%s]: ' "${label}" "${default_value}" >&2
-    read -r input
-    input="${input:-${default_value}}"
-    case "${input,,}" in
-      y|yes) printf 'true\n'; return ;;
-      n|no) printf 'false\n'; return ;;
-      *) printf 'please answer yes or no\n' >&2 ;;
-    esac
-  done
+  if [[ "${HYPRLAND_CONFIG_MODE}" == "separate" ]]; then
+    HYPRLAND_CONFIG_PATH="${HOME}/.config/hypr/listen.conf"
+  fi
 }
 
 existing_install_value() {
@@ -337,6 +377,8 @@ preserve_existing_settings() {
   [[ "${COMMAND_NAME_EXPLICIT}" == "true" || -z "${value}" ]] || COMMAND_NAME="${value}"
   value="$(existing_install_value STTD_HYPRLAND_CONFIG_PATH)"
   [[ -z "${value}" ]] || HYPRLAND_CONFIG_PATH="${value}"
+  value="$(existing_install_value STTD_HYPRLAND_CONFIG_MODE)"
+  [[ "${HYPRLAND_CONFIG_MODE_EXPLICIT}" == "true" || -z "${value}" ]] || HYPRLAND_CONFIG_MODE="${value}"
   value="$(existing_install_value STTD_HYPRLAND_BINDING)"
   [[ -z "${value}" ]] || HYPRLAND_BINDING="${value}"
   if [[ "${AS_SERVICE_EXPLICIT}" != "true" && -f "${SYSTEMD_UNIT_PATH}" ]]; then
@@ -359,14 +401,14 @@ configure_interactive_defaults() {
   configured_model="$(existing_install_value STTD_TRANSCRIBE_MODEL_PATH)"
 
   if [[ "${PROFILE_EXPLICIT}" != "true" ]]; then
-    PROFILE_NAME="$(prompt_value 'Runtime profile (linux or steam_deck)' "${configured_profile:-${PROFILE_NAME}}")"
+    PROFILE_NAME="$(sttd_prompt_value 'Runtime profile (linux or steam_deck)' "${configured_profile:-${PROFILE_NAME}}")"
   fi
   if [[ "${INTEGRATION_EXPLICIT}" != "true" ]]; then
     local integration_default="${configured_integration:-none}"
     if [[ -z "${configured_integration}" && "${PROFILE_NAME}" == "linux" && -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
       integration_default=hyprland
     fi
-    INTEGRATION_NAME="$(prompt_value 'Desktop integration (none or hyprland)' "${integration_default}")"
+    INTEGRATION_NAME="$(sttd_prompt_value 'Desktop integration (none or hyprland)' "${integration_default}")"
   fi
   if [[ "${MODEL_EXPLICIT}" != "true" ]]; then
     local configured_model_name=""
@@ -383,24 +425,24 @@ configure_interactive_defaults() {
     ACCELERATION_NAME=cuda
   fi
   if [[ "${LANGUAGE_EXPLICIT}" != "true" ]]; then
-    LANGUAGE_NAME="$(prompt_value 'Transcription language' "${configured_language:-${LANGUAGE_NAME}}")"
+    LANGUAGE_NAME="$(sttd_prompt_value 'Transcription language' "${configured_language:-${LANGUAGE_NAME}}")"
   fi
   if [[ "${AS_SERVICE_EXPLICIT}" != "true" ]]; then
     local service_default=no
     [[ "${AS_SERVICE}" == "true" ]] && service_default=yes
-    if [[ "$(prompt_yes_no 'Install and start a systemd user service?' "${service_default}")" == "true" ]]; then
+    if [[ "$(sttd_prompt_yes_no 'Install and start a systemd user service?' "${service_default}")" == "true" ]]; then
       AS_SERVICE=true
     else
       AS_SERVICE=false
     fi
   fi
   if [[ "${COMMAND_NAME_EXPLICIT}" != "true" ]]; then
-    COMMAND_NAME="$(prompt_value 'Public command name' "${COMMAND_NAME}")"
+    COMMAND_NAME="$(sttd_prompt_value 'Public command name' "${COMMAND_NAME}")"
   fi
   if [[ "${INTEGRATION_NAME}" == "hyprland" && "${HYPRLAND_BINDINGS_EXPLICIT}" != "true" ]]; then
     local binding_default=no
     [[ "${HYPRLAND_BINDINGS}" == "true" ]] && binding_default=yes
-    HYPRLAND_BINDINGS="$(prompt_yes_no 'Manage a Hyprland hold/release binding?' "${binding_default}")"
+    HYPRLAND_BINDINGS="$(sttd_prompt_yes_no 'Manage a Hyprland hold/release binding?' "${binding_default}")"
   fi
 }
 
@@ -475,7 +517,7 @@ resolve_command_collision() {
       printf 'public command already exists: %s; choose another name with --command-name\n' "${command_path}" >&2
       exit 1
     fi
-    COMMAND_NAME="$(prompt_value "Public command already exists; choose another name" "${COMMAND_NAME}-cli")"
+    COMMAND_NAME="$(sttd_prompt_value "Public command already exists; choose another name" "${COMMAND_NAME}-cli")"
     validate_command_name
     command_path="${HOME}/.local/bin/${COMMAND_NAME}"
   done
@@ -494,12 +536,12 @@ select_hyprland_binding() {
   printf "  2. \$mainMod SHIFT, SPACE\n" >&2
   printf '  3. CTRL ALT, SPACE\n' >&2
   printf '  4. enter a custom "MODIFIERS, KEY" value\n' >&2
-  selection="$(prompt_value 'Binding choice' 1)"
+  selection="$(sttd_prompt_value 'Binding choice' 1)"
   case "${selection}" in
     1) HYPRLAND_BINDING="\$mainMod ALT, SPACE" ;;
     2) HYPRLAND_BINDING="\$mainMod SHIFT, SPACE" ;;
     3) HYPRLAND_BINDING='CTRL ALT, SPACE' ;;
-    4) HYPRLAND_BINDING="$(prompt_value 'Custom binding (MODIFIERS, KEY)' "${HYPRLAND_BINDING}")" ;;
+    4) HYPRLAND_BINDING="$(sttd_prompt_value 'Custom binding (MODIFIERS, KEY)' "${HYPRLAND_BINDING}")" ;;
     *)
       if [[ "${selection}" == *,* ]]; then
         HYPRLAND_BINDING="${selection}"
@@ -514,7 +556,7 @@ select_hyprland_binding() {
 confirm_large_model() {
   [[ "${MODEL_NAME}" == "large" && "${INTERACTIVE_MODE}" == "true" ]] || return 0
   printf 'warning: large is a %s model and may require substantial memory\n' "$(sttd_model_display_size large)" >&2
-  if [[ "$(prompt_yes_no 'Continue with the large model?' no)" != "true" ]]; then
+  if [[ "$(sttd_prompt_yes_no 'Continue with the large model?' no)" != "true" ]]; then
     printf 'installation cancelled before downloading the large model\n' >&2
     exit 1
   fi
@@ -532,8 +574,11 @@ confirm_setup_summary() {
   printf '  public command: %s\n' "${COMMAND_NAME}" >&2
   if [[ "${INTEGRATION_NAME}" == "hyprland" ]]; then
     printf '  Hyprland bindings: %s (%s)\n' "${HYPRLAND_BINDINGS:-no}" "${HYPRLAND_BINDING}" >&2
+    if [[ "${HYPRLAND_BINDINGS}" == "true" || "${HYPRLAND_BINDINGS}" == "yes" ]]; then
+      printf '  Hyprland config mode: %s (%s)\n' "${HYPRLAND_CONFIG_MODE}" "${HYPRLAND_CONFIG_PATH}" >&2
+    fi
   fi
-  if [[ "$(prompt_yes_no 'Continue with this setup?' yes)" != "true" ]]; then
+  if [[ "$(sttd_prompt_yes_no 'Continue with this setup?' yes)" != "true" ]]; then
     printf 'installation cancelled before changing files\n' >&2
     exit 1
   fi
@@ -649,6 +694,7 @@ configure_env_file() {
   sttd_set_env_value "${ENV_FILE}" "STTD_MODEL_SHA256_LARGE" "${STTD_MODEL_SHA256_LARGE:-}"
   sttd_set_env_value "${ENV_FILE}" "STTD_PUBLIC_COMMAND_NAME" "${COMMAND_NAME}"
   sttd_set_env_value "${ENV_FILE}" "STTD_HYPRLAND_CONFIG_PATH" "${HYPRLAND_CONFIG_PATH}"
+  sttd_set_env_value "${ENV_FILE}" "STTD_HYPRLAND_CONFIG_MODE" "${HYPRLAND_CONFIG_MODE}"
   sttd_set_env_value "${ENV_FILE}" "STTD_HYPRLAND_BINDING" "${HYPRLAND_BINDING}"
 
   if [[ "${PROFILE_CHANGED}" == "true" ]]; then
@@ -684,6 +730,19 @@ install_public_command() {
 configure_hyprland_bindings() {
   if [[ "${INTEGRATION_NAME}" != "hyprland" || "${HYPRLAND_BINDINGS}" != "true" && "${HYPRLAND_BINDINGS}" != "yes" ]]; then
     return
+  fi
+  if [[ "${HYPRLAND_CONFIG_MODE}" == "skip" ]]; then
+    printf 'Hyprland bindings skipped; configure them in your Nix/Home Manager configuration\n' >&2
+    return 0
+  fi
+  if [[ -L "${HYPRLAND_CONFIG_PATH}" ]]; then
+    printf 'warning: Hyprland bindings were not installed because the config is a symlink: %s\n' "${HYPRLAND_CONFIG_PATH}" >&2
+    printf 'configure the bindings in Nix/Home Manager or pass --hyprland-config with a writable file\n' >&2
+    return 0
+  fi
+  if [[ "${HYPRLAND_CONFIG_MODE}" == "separate" && ! -e "${HYPRLAND_CONFIG_PATH}" ]]; then
+    mkdir -p "$(dirname "${HYPRLAND_CONFIG_PATH}")"
+    printf '# listen-managed Hyprland bindings\n' > "${HYPRLAND_CONFIG_PATH}"
   fi
   if [[ ! -f "${HYPRLAND_CONFIG_PATH}" ]]; then
     printf 'Hyprland bindings skipped because the config does not exist: %s\n' "${HYPRLAND_CONFIG_PATH}" >&2
@@ -750,6 +809,15 @@ print_next_steps() {
 
   if [[ "${INTEGRATION_NAME}" == "hyprland" ]]; then
     printf 'Hyprland integration: %s\n' "${HYPRLAND_BINDINGS:-not configured}"
+    if [[ "${HYPRLAND_BINDINGS}" == "true" || "${HYPRLAND_BINDINGS}" == "yes" ]]; then
+      printf 'Hyprland config mode: %s (%s)\n' "${HYPRLAND_CONFIG_MODE}" "${HYPRLAND_CONFIG_PATH}"
+      if [[ "${HYPRLAND_CONFIG_MODE}" == "separate" ]]; then
+        printf 'add this line to your declarative Hyprland config: source = %s\n' "${HYPRLAND_CONFIG_PATH}"
+        printf 'then run home-manager switch or nixos-rebuild switch and reload Hyprland\n'
+      elif [[ "${HYPRLAND_CONFIG_MODE}" == "skip" ]]; then
+        printf 'configure the bindings in your declarative Nix/Home Manager configuration\n'
+      fi
+    fi
   fi
   case ":${PATH:-}:" in
     *":${HOME}/.local/bin:"*) ;;

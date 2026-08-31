@@ -133,13 +133,23 @@ main() {
 
   if [[ "${NON_INTERACTIVE}" != "true" && -r /dev/tty ]]; then
     printf 'WARNING: this downloads and executes the installer for %s from GitHub.\n' "${VERSION}" >&2
-    printf 'Type uppercase Y to continue: ' >&2
     local confirmation
-    IFS= read -r confirmation < /dev/tty || true
-    if [[ "${confirmation}" != "Y" ]]; then
-      printf 'bootstrap cancelled\n' >&2
-      exit 1
-    fi
+    while true; do
+      printf 'Continue with this download? [yes/no, default: no]: ' >&2
+      if ! IFS= read -r confirmation < /dev/tty; then
+        printf 'bootstrap cancelled\n' >&2
+        exit 1
+      fi
+      confirmation="${confirmation:-no}"
+      case "${confirmation,,}" in
+        y|yes) break ;;
+        n|no)
+          printf 'bootstrap cancelled\n' >&2
+          exit 1
+          ;;
+        *) printf 'please answer yes or no\n' >&2 ;;
+      esac
+    done
   fi
 
   printf 'downloading %s from %s\n' "${archive_name}" "${REPOSITORY}"

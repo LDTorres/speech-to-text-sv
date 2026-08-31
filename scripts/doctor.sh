@@ -200,12 +200,17 @@ check_installation_status() {
   fi
 
   if [[ "$(value_from_env_file STTD_PLATFORM_INTEGRATION)" == "hyprland" ]]; then
-    local hyprland_config
+    local hyprland_config hyprland_mode
     hyprland_config="$(value_from_env_file STTD_HYPRLAND_CONFIG_PATH)"
     hyprland_config="${hyprland_config:-${HOME}/.config/hypr/hyprland.conf}"
+    hyprland_mode="$(value_from_env_file STTD_HYPRLAND_CONFIG_MODE)"
+    hyprland_mode="${hyprland_mode:-auto}"
     report_info "Hyprland config: ${hyprland_config}"
+    report_info "Hyprland config mode: ${hyprland_mode}"
     report_info "Hyprland binding: $(value_from_env_file STTD_HYPRLAND_BINDING)"
-    if [[ -f "${hyprland_config}" ]] && grep -Fq '# listen:begin' "${hyprland_config}"; then
+    if [[ -L "${hyprland_config}" ]]; then
+      report_warn 'Hyprland config is symlinked; manage bindings in Nix/Home Manager or use a separate writable file'
+    elif [[ -f "${hyprland_config}" ]] && grep -Fq '# listen:begin' "${hyprland_config}"; then
       report_ok 'managed Hyprland bindings available'
     else
       report_info 'managed Hyprland bindings are not installed'

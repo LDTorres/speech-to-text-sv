@@ -363,14 +363,14 @@ For hold mode, add bindings similar to these to the user's Hyprland bindings
 file:
 
 ```ini
-bind = $mainMod, D, exec, /home/TU_USUARIO/.local/opt/sttd/sttdctl control start
-bindr = $mainMod, D, exec, /home/TU_USUARIO/.local/opt/sttd/sttdctl control stop
+bind = $mainMod, D, exec, /home/YOUR_USER/.local/opt/sttd/sttdctl control start
+bindr = $mainMod, D, exec, /home/YOUR_USER/.local/opt/sttd/sttdctl control stop
 ```
 
 For toggle mode, configure `STTD_TRIGGER_MODE=toggle` and use one binding:
 
 ```ini
-bind = $mainMod, D, exec, /home/TU_USUARIO/.local/opt/sttd/sttdctl control toggle
+bind = $mainMod, D, exec, /home/YOUR_USER/.local/opt/sttd/sttdctl control toggle
 ```
 
 The installer can optionally add a managed hold/release block to Hyprland:
@@ -381,8 +381,22 @@ The installer can optionally add a managed hold/release block to Hyprland:
 ```
 
 It proposes `$mainMod ALT, SPACE`, detects the selected binding, and offers
-two alternatives or a custom combination. The managed block is marked with
+alternatives or a custom combination. The managed block is marked with
 `# listen:begin` / `# listen:end`; uninstall removes only that block.
+
+If `~/.config/hypr/hyprland.conf` is a symlink, as is common with NixOS or
+Home Manager, the installer will not modify it or anything under `/nix/store`.
+Interactive setup offers a separate writable file at
+`~/.config/hypr/listen.conf`; add the following line to the declarative
+Hyprland configuration and rebuild it:
+
+```ini
+source = /home/YOUR_USER/.config/hypr/listen.conf
+```
+
+For automation, use `--hyprland-config-mode separate`. You can also use
+`--hyprland-config-mode skip` and configure the bindings entirely in
+Nix/Home Manager, or pass `--hyprland-config /path/to/writable.conf`.
 
 You can also select the model and language during installation:
 

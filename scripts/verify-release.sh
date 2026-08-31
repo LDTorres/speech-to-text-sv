@@ -109,6 +109,7 @@ main() {
   require_file "${release_dir}/profiles/steam_deck.env"
   require_file "${release_dir}/scripts/lib/model.sh"
   require_file "${release_dir}/scripts/lib/hyprland.sh"
+  require_file "${release_dir}/scripts/lib/prompt.sh"
   local whisper_wrapper
   whisper_wrapper="$(find "${release_dir}/.sttd/bin" -maxdepth 1 -type f -name 'whisper-cli-v*' ! -name '*.real' | head -n 1)"
   if [[ -z "${whisper_wrapper}" ]]; then
@@ -135,6 +136,7 @@ main() {
   bash -n "${release_dir}/scripts/listen.sh"
   bash -n "${release_dir}/scripts/lib/model.sh"
   bash -n "${release_dir}/scripts/lib/hyprland.sh"
+  bash -n "${release_dir}/scripts/lib/prompt.sh"
 
   if strings "${release_dir}/sttd" | grep -Fq 'linux hotkey source requires a build with cgo and x11hotkey support'; then
     printf 'release verification failed: sttd was built without x11hotkey support\n' >&2

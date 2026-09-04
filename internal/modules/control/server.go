@@ -36,7 +36,7 @@ const (
 const (
 	maxRequestBytes       = 64 * 1024
 	maxConcurrentRequests = 16
-	requestTimeout        = 30 * time.Second
+	requestTimeout        = 2 * time.Minute
 )
 
 type Request struct {

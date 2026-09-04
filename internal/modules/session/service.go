@@ -114,7 +114,7 @@ func (s *SessionService) startRecording(ctx context.Context) error {
 }
 
 func (s *SessionService) StopRecordingAndProcess(ctx context.Context) error {
-	if err := s.acquireOperation(ctx); err != nil {
+	if err := s.acquireOperationBlocking(ctx); err != nil {
 		return err
 	}
 	defer s.releaseOperation()
@@ -244,6 +244,19 @@ func (s *SessionService) acquireOperation(ctx context.Context) error {
 		return nil
 	default:
 		return ErrBusy
+	}
+}
+
+func (s *SessionService) acquireOperationBlocking(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	select {
+	case s.operation <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

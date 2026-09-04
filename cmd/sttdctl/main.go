@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	socketTimeout         = 5 * time.Second
+	socketConnectTimeout  = 5 * time.Second
+	socketResponseTimeout = 2 * time.Minute
 	configApplyTimeout    = 10 * time.Minute
 	serviceCommandTimeout = 30 * time.Second
 )
@@ -347,7 +348,7 @@ func runLogs(ctx context.Context, args []string) error {
 }
 
 func sendControlRequest(ctx context.Context, socketPath string, request control.Request) (control.Response, error) {
-	dialer := net.Dialer{Timeout: socketTimeout}
+	dialer := net.Dialer{Timeout: socketConnectTimeout}
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return control.Response{}, fmt.Errorf("dial external control: %w", err)
@@ -356,7 +357,7 @@ func sendControlRequest(ctx context.Context, socketPath string, request control.
 		_ = conn.Close()
 	}()
 
-	deadline := time.Now().Add(socketTimeout)
+	deadline := time.Now().Add(socketResponseTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}

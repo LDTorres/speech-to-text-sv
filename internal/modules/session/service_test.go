@@ -241,7 +241,7 @@ func TestSessionService_RetryLastPaste_NoTranscript_ReturnsError(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoTranscript)
 }
 
-func TestSessionService_ConcurrentStartAndStop_ReturnsBusyWithoutReordering(t *testing.T) {
+func TestSessionService_ConcurrentStartAndStop_WaitsForStart(t *testing.T) {
 	t.Parallel()
 
 	recorder := &blockingRecorder{
@@ -259,7 +259,40 @@ func TestSessionService_ConcurrentStartAndStop_ReturnsBusyWithoutReordering(t *t
 		t.Fatal("recorder start did not begin")
 	}
 
-	require.ErrorIs(t, service.StopRecordingAndProcess(context.Background()), ErrBusy)
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- service.StopRecordingAndProcess(context.Background()) }()
+
+	close(recorder.release)
+	require.NoError(t, <-startDone)
+	require.NoError(t, <-stopDone)
+	require.Equal(t, StateIdle, service.Status(context.Background()).State)
+	require.Equal(t, 1, recorder.stopCalls)
+}
+
+func TestSessionService_StopWhileStartIsBlocked_RespectsCancellation(t *testing.T) {
+	t.Parallel()
+
+	recorder := &blockingRecorder{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	service := NewService(zap.NewNop(), recorder, &fakeTranscriber{}, &fakeClipboard{}, notify.NewNoop())
+
+	startDone := make(chan error, 1)
+	go func() { startDone <- service.StartRecording(context.Background()) }()
+
+	select {
+	case <-recorder.started:
+	case <-time.After(time.Second):
+		t.Fatal("recorder start did not begin")
+	}
+
+	stopCtx, cancel := context.WithCancel(context.Background())
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- service.StopRecordingAndProcess(stopCtx) }()
+	cancel()
+
+	require.ErrorIs(t, <-stopDone, context.Canceled)
 	close(recorder.release)
 	require.NoError(t, <-startDone)
 	require.Equal(t, StateRecording, service.Status(context.Background()).State)
@@ -304,9 +337,10 @@ func TestSessionService_StartRecording_DuringProcessing_ReturnsBusy(t *testing.T
 }
 
 type blockingRecorder struct {
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
+	started   chan struct{}
+	release   chan struct{}
+	once      sync.Once
+	stopCalls int
 }
 
 func (r *blockingRecorder) Start(ctx context.Context) error {
@@ -320,7 +354,8 @@ func (r *blockingRecorder) Start(ctx context.Context) error {
 }
 
 func (r *blockingRecorder) Stop(ctx context.Context) (audio.Recording, error) {
-	return audio.Recording{}, audio.ErrNotRecording
+	r.stopCalls++
+	return audio.Recording{Path: "/tmp/sttd/last-recording.wav"}, nil
 }
 
 type fakeRecorder struct {
